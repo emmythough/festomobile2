@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Wendy's mobile API is plain HTTP on 74.208.155.72:8090 (bearer-token
+  gated, not TLS; see WendyApi.kt for the security tradeoff notes).
+  Cleartext is scoped to exactly this IP; every other host keeps Android's
+  default modern policy (cleartext blocked).
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">74.208.155.72</domain>
+    </domain-config>
+</network-security-config>

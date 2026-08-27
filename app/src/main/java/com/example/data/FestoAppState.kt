@@ -13,6 +13,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collect
 import java.util.UUID
 
 enum class AuthMode {
@@ -24,6 +25,42 @@ enum class AuthMode {
 class FestoAppState(
     val coroutineScope: CoroutineScope
 ) {
+    companion object {
+        private const val MAIN_CONVERSATION_ID = "wendy-main"
+    }
+
+    init {
+        coroutineScope.launch { loadRealHistory() }
+    }
+
+    private suspend fun loadRealHistory() {
+        val history = WendyApi.fetchHistory()
+        if (history.isNotEmpty()) {
+            val messages = messagesMap.getOrPut(MAIN_CONVERSATION_ID) { mutableStateListOf() }
+            messages.clear()
+            messages.addAll(
+                history.mapIndexed { index, turn ->
+                    Message(
+                        id = "hist-$index",
+                        conversationId = MAIN_CONVERSATION_ID,
+                        role = if (turn.role == "user") Role.USER else Role.ASSISTANT,
+                        content = turn.text,
+                        timestamp = turn.timestamp,
+                    )
+                }
+            )
+            val idx = conversations.indexOfFirst { it.id == MAIN_CONVERSATION_ID }
+            if (idx != -1) {
+                conversations[idx] = conversations[idx].copy(
+                    preview = history.last().text.take(60),
+                    messageCount = messages.size,
+                    updatedAt = history.last().timestamp,
+                )
+            }
+        }
+        isHistoryLoading = false
+    }
+
     // Auth State
     var isAuthenticated by mutableStateOf(true) // Default signed in for instant smooth preview
     var authMode by mutableStateOf(AuthMode.SIGN_IN)
@@ -37,16 +74,22 @@ class FestoAppState(
     var selectedModel by mutableStateOf(MockData.getDefaultModel())
         private set
 
-    val conversations = mutableStateListOf<Conversation>().apply { addAll(MockData.initialConversations) }
-    var activeConversationId by mutableStateOf<String?>(MockData.initialConversations.firstOrNull()?.id)
+    // Real Wendy has one continuous conversation shared with Telegram, not
+    // separate per-device threads -- so there's exactly one conversation
+    // here, seeded empty and filled in from GET /api/history below rather
+    // than from MockData.
+    val conversations = mutableStateListOf(
+        Conversation(id = MAIN_CONVERSATION_ID, title = "Wendy", modelId = MockData.getDefaultModel().id)
+    )
+    var activeConversationId by mutableStateOf<String?>(MAIN_CONVERSATION_ID)
         private set
 
     // Messages grouped by conversation ID
     val messagesMap = mutableStateMapOf<String, MutableList<Message>>().apply {
-        MockData.initialMessages.forEach { (convId, list) ->
-            put(convId, mutableStateListOf<Message>().apply { addAll(list) })
-        }
+        put(MAIN_CONVERSATION_ID, mutableStateListOf())
     }
+    var isHistoryLoading by mutableStateOf(true)
+        private set
 
     // Cross-session Memories
     val memories = mutableStateListOf<MemoryFact>().apply { addAll(MockData.initialMemories) }
@@ -244,23 +287,34 @@ class FestoAppState(
         convMessages.add(placeholderMsg)
 
         streamingJob = coroutineScope.launch {
-            val fullResponse = generateIntelligentResponse(userPrompt, selectedModel)
-            val tokens = fullResponse.split(" ")
-            var currentContent = ""
+            var fullResponse = ""
+            var errorMessage: String? = null
+            val startedAt = System.currentTimeMillis()
 
-            for (i in tokens.indices) {
-                delay(35) // Realistic token stream cadence
-                currentContent += (if (i == 0) "" else " ") + tokens[i]
-                val msgIndex = convMessages.indexOfFirst { it.id == assistantMsgId }
-                if (msgIndex != -1) {
-                    convMessages[msgIndex] = convMessages[msgIndex].copy(
-                        content = currentContent,
-                        isStreaming = true
-                    )
+            WendyApi.sendMessage(userPrompt).collect { event ->
+                when (event) {
+                    is WendyEvent.Delta -> {
+                        fullResponse = event.text
+                        val msgIndex = convMessages.indexOfFirst { it.id == assistantMsgId }
+                        if (msgIndex != -1) {
+                            convMessages[msgIndex] = convMessages[msgIndex].copy(
+                                content = fullResponse,
+                                isStreaming = true
+                            )
+                        }
+                    }
+                    is WendyEvent.Final -> fullResponse = event.text
+                    is WendyEvent.Error -> errorMessage = event.message
                 }
             }
 
-            // Finalize message with usage metrics
+            if (errorMessage != null && fullResponse.isBlank()) {
+                fullResponse = "Couldn't reach Wendy: $errorMessage"
+            }
+
+            // Real token counts aren't returned by the API yet -- these are
+            // the same length-based estimates the mock used, kept only for
+            // the usage/cost UI until the server reports real usage.
             val inTokens = (userPrompt.length / 3.8).toInt().coerceAtLeast(15)
             val outTokens = (fullResponse.length / 3.6).toInt().coerceAtLeast(25)
             val cost = (inTokens * selectedModel.inputPricePerM + outTokens * selectedModel.outputPricePerM) / 1_000_000.0
@@ -276,21 +330,22 @@ class FestoAppState(
                 )
             }
 
-            // Log usage event
-            val event = UsageEvent(
-                id = System.currentTimeMillis(),
-                model = selectedModel.id,
-                kind = "chat",
-                inputTokens = inTokens,
-                outputTokens = outTokens,
-                costUsd = cost,
-                durationMs = (tokens.size * 35),
-                timestamp = System.currentTimeMillis()
-            )
-            usageEvents.add(0, event)
+            if (errorMessage == null) {
+                val event = UsageEvent(
+                    id = System.currentTimeMillis(),
+                    model = selectedModel.id,
+                    kind = "chat",
+                    inputTokens = inTokens,
+                    outputTokens = outTokens,
+                    costUsd = cost,
+                    durationMs = (System.currentTimeMillis() - startedAt).toInt(),
+                    timestamp = System.currentTimeMillis()
+                )
+                usageEvents.add(0, event)
 
-            // Distill memory if notable
-            maybeDistillMemory(userPrompt, fullResponse, activeConversation?.title)
+                // Distill memory if notable
+                maybeDistillMemory(userPrompt, fullResponse, activeConversation?.title)
+            }
 
             isStreamingResponse = false
         }
@@ -450,23 +505,6 @@ class FestoAppState(
 
     fun deleteMemory(id: String) {
         memories.removeAll { it.id == id }
-    }
-
-    private fun generateIntelligentResponse(prompt: String, model: ModelOption): String {
-        val lower = prompt.lowercase()
-        return when {
-            lower.contains("spec") || lower.contains("architecture") ->
-                "### Architectural Summary\n\n- **Client**: Native Jetpack Compose mobile shell with M3 dynamic theming & Brand Nova (`#C96F4A`).\n- **Voice**: 24kHz mono PCM16 audio pipeline with instant barge-in support.\n- **Vector Memory**: PostgreSQL `pgvector` HNSW cosine indexing at 1536 dimensions.\n- **Security**: OpenRouter API key strictly guarded server-side behind JWT auth."
-
-            lower.contains("model") || lower.contains("cost") || lower.contains("compare") ->
-                "Currently using **${model.name}** (${model.tier.label} tier, ${model.contextDisplay} context).\n\n- **Input**: $${model.inputPricePerM} / Mtok\n- **Output**: $${model.outputPricePerM} / Mtok\n- **Capability**: ${model.description}\n\nYou can switch models at any time from the top bar chip; history and memory remain unified."
-
-            lower.contains("voice") || lower.contains("audio") ->
-                "Voice and text exist as **one unified conversation**. When you speak, audio is processed, transcribed, and saved directly to the active thread history so you can alternate seamlessly between typing and speaking."
-
-            else ->
-                "I've processed your request using **${model.name}**. With our cross-conversation memory layer and unified text-voice state, all context remains synced across your active workspace."
-        }
     }
 
     private fun generateIntelligentVoiceReply(prompt: String, model: ModelOption): String {
