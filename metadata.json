@@ -1,0 +1,6 @@
+{
+  "name": "Festo Mobile",
+  "description": "Minimalist AI assistant with streaming text chat, model selection, voice conversation, and cross-thread memory.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

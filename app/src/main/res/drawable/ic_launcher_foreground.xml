@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Center Orb Glow -->
+    <path
+        android:pathData="M54,54m-22,0a22,22 0 1,1 44,0a22,22 0 1,1 -44,0">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="46"
+                android:startY="46"
+                android:endX="62"
+                android:endY="62"
+                android:type="radial"
+                android:gradientRadius="22">
+                <item android:color="#FFE3BD" android:offset="0.0" />
+                <item android:color="#E0C96F4A" android:offset="0.45" />
+                <item android:color="#00C96F4A" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <!-- Core Nova 4-Point Star Spark -->
+    <path
+        android:pathData="M54,32 C54,44.1 63.9,54 76,54 C63.9,54 54,63.9 54,76 C54,63.9 44.1,54 32,54 C44.1,54 54,44.1 54,32 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="40"
+                android:startY="36"
+                android:endX="68"
+                android:endY="72"
+                android:type="linear">
+                <item android:color="#FFF3E0" android:offset="0.0" />
+                <item android:color="#FFD6A5" android:offset="0.3" />
+                <item android:color="#C96F4A" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <!-- Inner Spark Highlight -->
+    <path
+        android:pathData="M54,42 C54,48.6 59.4,54 66,54 C59.4,54 54,59.4 54,66 C54,59.4 48.6,54 42,54 C48.6,54 54,48.6 54,42 Z"
+        android:fillColor="#FFFFFF" />
+    <!-- Subtle secondary micro sparks -->
+    <path
+        android:pathData="M72,36 C72,39 75,42 78,42 C75,42 72,45 72,48 C72,45 69,42 66,42 C69,42 72,39 72,36 Z"
+        android:fillColor="#FFD4B8" />
+    <path
+        android:pathData="M36,66 C36,68 38,70 40,70 C38,70 36,72 36,74 C36,72 34,70 32,70 C34,70 36,68 36,66 Z"
+        android:fillColor="#C96F4A" />
+</vector>
