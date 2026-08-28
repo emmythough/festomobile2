@@ -14,6 +14,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.collect
+import java.io.IOException
 import java.util.UUID
 
 enum class AuthMode {
@@ -23,7 +24,8 @@ enum class AuthMode {
 
 @Stable
 class FestoAppState(
-    val coroutineScope: CoroutineScope
+    val coroutineScope: CoroutineScope,
+    private val audioEngine: VoiceAudioEngine? = null
 ) {
     companion object {
         private const val MAIN_CONVERSATION_ID = "wendy-main"
@@ -113,6 +115,14 @@ class FestoAppState(
     var voiceLiveTranscript by mutableStateOf("")
     var voiceRecordingDurationSec by mutableStateOf(0)
     var voiceAudioLevels = mutableStateListOf(0.2f, 0.4f, 0.6f, 0.3f, 0.7f, 0.5f, 0.8f, 0.4f)
+
+    /** Set true once the UI has obtained RECORD_AUDIO permission. */
+    var micPermissionGranted by mutableStateOf(false)
+        private set
+
+    fun onMicPermissionResult(granted: Boolean) {
+        micPermissionGranted = granted
+    }
 
     // Active Streaming Job
     private var streamingJob: Job? = null
@@ -371,21 +381,36 @@ class FestoAppState(
         }
     }
 
-    // Voice Engine Simulation & State Transitions
+    // Voice Engine -- real mic → STT → chat → TTS → playback.
+    // The full pipeline runs through the same Wendy the text chat uses, so
+    // a spoken message and a typed one produce identical replies. STT and
+    // TTS are proxied server-side (the OpenRouter key never ships in the
+    // app); the chat call reuses the existing streamAssistantResponse path.
     fun startVoiceRecording() {
         if (voiceState != VoiceState.IDLE) return
-        voiceState = VoiceState.RECORDING
+        val engine = audioEngine ?: return
+        if (!micPermissionGranted) {
+            // The UI should have requested RECORD_AUDIO before opening the
+            // overlay; if it somehow didn't, refuse rather than crash.
+            voiceLiveTranscript = "Microphone permission required. Allow access to record voice."
+            return
+        }
         voiceLiveTranscript = ""
         voiceRecordingDurationSec = 0
+        engine.startRecording()
+        voiceState = VoiceState.RECORDING
 
         voiceTimerJob?.cancel()
         voiceTimerJob = coroutineScope.launch {
             while (voiceState == VoiceState.RECORDING) {
                 delay(100)
                 voiceRecordingDurationSec++
-                // Dynamic audio visualizer level simulation
-                for (i in voiceAudioLevels.indices) {
-                    voiceAudioLevels[i] = (0.2f + Math.random().toFloat() * 0.75f).coerceIn(0.1f, 1.0f)
+                // Real mic level from the recorder, not random bars.
+                val level = engine.currentLevel()
+                if (voiceAudioLevels.isNotEmpty()) {
+                    for (i in voiceAudioLevels.indices) {
+                        voiceAudioLevels[i] = if (i % 2 == 0) level else (level * 0.7f + 0.2f)
+                    }
                 }
             }
         }
@@ -394,19 +419,33 @@ class FestoAppState(
     fun stopVoiceRecordingAndSend() {
         if (voiceState != VoiceState.RECORDING) return
         voiceTimerJob?.cancel()
+        val engine = audioEngine ?: return
+        val audioBase64 = engine.stopRecordingAndGetBase64()
         voiceState = VoiceState.SENDING
 
         coroutineScope.launch {
-            delay(500)
-            voiceState = VoiceState.THINKING
+            if (audioBase64 == null) {
+                voiceState = VoiceState.IDLE
+                voiceLiveTranscript = "No audio captured. Please try again."
+                return@launch
+            }
 
-            val simulatedSpokenInputs = listOf(
-                "Can you summarize the difference between Gemini 2.5 Flash and Claude Sonnet 4.5?",
-                "What is our strategy for handling real-time audio playback buffering?",
-                "Let's review the memory recall system and vector index dimension rules.",
-                "How does the model picker persist choices across conversations?"
-            )
-            val recognizedPrompt = simulatedSpokenInputs.random()
+            // 1) Speech-to-text
+            val recognizedPrompt = try {
+                WendyApi.transcribeAudio(audioBase64, format = "m4a")
+            } catch (e: IOException) {
+                voiceState = VoiceState.IDLE
+                voiceLiveTranscript = "Couldn't transcribe audio: ${e.message}"
+                return@launch
+            }.trim()
+
+            if (recognizedPrompt.isEmpty()) {
+                voiceState = VoiceState.IDLE
+                voiceLiveTranscript = "I couldn't hear anything. Please try again."
+                return@launch
+            }
+            voiceLiveTranscript = recognizedPrompt
+
             val convId = activeConversationId ?: run {
                 val newId = "conv-${UUID.randomUUID().toString().take(8)}"
                 val newConv = Conversation(id = newId, title = recognizedPrompt.take(30), modelId = selectedModel.id)
@@ -416,71 +455,138 @@ class FestoAppState(
                 newId
             }
 
-            // Append user spoken message
+            // 2) Append the transcribed user spoken message
             val userMsg = Message(
                 id = "vmsg-user-${UUID.randomUUID().toString().take(8)}",
                 conversationId = convId,
                 role = Role.USER,
                 content = recognizedPrompt,
                 modality = Modality.VOICE,
-                audioDurationSec = (voiceRecordingDurationSec / 10f).coerceAtLeast(2.0f),
+                audioDurationSec = (voiceRecordingDurationSec / 10f).coerceAtLeast(0.5f),
                 timestamp = System.currentTimeMillis()
             )
             messagesMap[convId]?.add(userMsg)
 
-            delay(700)
-            voiceState = VoiceState.SPEAKING
-            voiceLiveTranscript = ""
+            // 3) Run through the SAME reply path as text (real Wendy brain).
+            voiceState = VoiceState.THINKING
+            val replyText = runVoiceReply(convId, recognizedPrompt)
+            if (voiceState != VoiceState.THINKING) return@launch // cancelled
 
-            val spokenReply = generateIntelligentVoiceReply(recognizedPrompt, selectedModel)
-            val words = spokenReply.split(" ")
-
-            for (i in words.indices) {
-                if (voiceState != VoiceState.SPEAKING) break // Barge-in check
-                delay(180) // Spoken word rate (~150-180ms per word)
-                voiceLiveTranscript += (if (i == 0) "" else " ") + words[i]
-            }
-
-            if (voiceState == VoiceState.SPEAKING) {
-                // Completed spoken reply
-                val inTokens = (recognizedPrompt.length / 3.8).toInt().coerceAtLeast(15)
-                val outTokens = (spokenReply.length / 3.6).toInt().coerceAtLeast(20)
-                val cost = (inTokens * selectedModel.inputPricePerM + outTokens * selectedModel.outputPricePerM) / 1_000_000.0
-
-                val assistantMsg = Message(
-                    id = "vmsg-asst-${UUID.randomUUID().toString().take(8)}",
-                    conversationId = convId,
-                    role = Role.ASSISTANT,
-                    content = spokenReply,
-                    modality = Modality.VOICE,
-                    model = selectedModel.id,
-                    audioDurationSec = (words.size * 0.22f).coerceAtLeast(3.0f),
-                    inputTokens = inTokens,
-                    outputTokens = outTokens,
-                    costUsd = cost,
-                    timestamp = System.currentTimeMillis()
-                )
-                messagesMap[convId]?.add(assistantMsg)
-
-                usageEvents.add(0, UsageEvent(
-                    id = System.currentTimeMillis(),
-                    model = selectedModel.id,
-                    kind = "voice",
-                    inputTokens = inTokens,
-                    outputTokens = outTokens,
-                    costUsd = cost,
-                    durationMs = (words.size * 180),
-                    timestamp = System.currentTimeMillis()
-                ))
-
-                delay(800)
+            if (replyText == null || replyText.isBlank()) {
                 voiceState = VoiceState.IDLE
+                return@launch
             }
+
+            // 4) Text-to-speech and playback
+            val mp3 = try {
+                WendyApi.synthesizeSpeech(replyText)
+            } catch (e: IOException) {
+                // TTS failed; leave the text reply visible instead of a crash.
+                voiceState = VoiceState.IDLE
+                voiceLiveTranscript = ""
+                return@launch
+            }
+
+            val inTokens = (recognizedPrompt.length / 3.8).toInt().coerceAtLeast(15)
+            val outTokens = (replyText.length / 3.6).toInt().coerceAtLeast(20)
+            val cost = (inTokens * selectedModel.inputPricePerM + outTokens * selectedModel.outputPricePerM) / 1_000_000.0
+
+            val assistantMsg = Message(
+                id = "vmsg-asst-${UUID.randomUUID().toString().take(8)}",
+                conversationId = convId,
+                role = Role.ASSISTANT,
+                content = replyText,
+                modality = Modality.VOICE,
+                model = selectedModel.id,
+                audioDurationSec = (replyText.split(" ").size * 0.22f).coerceAtLeast(2.0f),
+                inputTokens = inTokens,
+                outputTokens = outTokens,
+                costUsd = cost,
+                timestamp = System.currentTimeMillis()
+            )
+            messagesMap[convId]?.add(assistantMsg)
+            usageEvents.add(0, UsageEvent(
+                id = System.currentTimeMillis(),
+                model = selectedModel.id,
+                kind = "voice",
+                inputTokens = inTokens,
+                outputTokens = outTokens,
+                costUsd = cost,
+                durationMs = (replyText.split(" ").size * 180),
+                timestamp = System.currentTimeMillis()
+            ))
+
+            // 5) Play the synthesized reply through the speaker.
+            voiceLiveTranscript = ""
+            voiceState = VoiceState.SPEAKING
+            engine.onPlaybackEnd = {
+                if (voiceState == VoiceState.SPEAKING) {
+                    voiceState = VoiceState.IDLE
+                }
+            }
+            engine.playMp3(mp3)
         }
+    }
+
+    /**
+     * Runs the transcribed prompt through the normal assistant reply path
+     * and returns the final text (or null if cancelled / failed). Keeps the
+     * voice reply identical to a typed message on the same conversation.
+     */
+    private suspend fun runVoiceReply(convId: String, prompt: String): String? {
+        val messages = messagesMap[convId] ?: return null
+        val assistantMsgId = "msg-${UUID.randomUUID().toString().take(8)}"
+        val placeholder = Message(
+            id = assistantMsgId,
+            conversationId = convId,
+            role = Role.ASSISTANT,
+            content = "",
+            modality = Modality.VOICE,
+            model = selectedModel.id,
+            isStreaming = true,
+            timestamp = System.currentTimeMillis()
+        )
+        messages.add(placeholder)
+
+        var full = ""
+        try {
+            WendyApi.sendMessage(prompt).collect { event ->
+                when (event) {
+                    is WendyEvent.Delta -> {
+                        full = event.text
+                        val idx = messages.indexOfFirst { it.id == assistantMsgId }
+                        if (idx != -1) messages[idx] = messages[idx].copy(content = full)
+                    }
+                    is WendyEvent.Final -> full = event.text
+                    is WendyEvent.Error -> {
+                        val idx = messages.indexOfFirst { it.id == assistantMsgId }
+                        if (idx != -1) messages[idx] = messages[idx].copy(content = "Couldn't reach Wendy: ${event.message}")
+                        full = ""
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            full = ""
+        }
+
+        val idx = messages.indexOfFirst { it.id == assistantMsgId }
+        if (idx != -1) {
+            messages[idx] = messages[idx].copy(
+                content = full,
+                isStreaming = false,
+                isError = full.isBlank()
+            )
+        }
+        // runVoiceReply appends the assistant message itself; the voice
+        // pipeline adds a separate VOICE modality copy, so remove the text
+        // placeholder to avoid duplication.
+        messages.removeAll { it.id == assistantMsgId }
+        return if (full.isBlank()) null else full
     }
 
     fun bargeInStopPlayback() {
         if (voiceState == VoiceState.SPEAKING || voiceState == VoiceState.THINKING) {
+            audioEngine?.stopPlayback()
             voiceState = VoiceState.IDLE
             voiceLiveTranscript = ""
         }
@@ -488,9 +594,12 @@ class FestoAppState(
 
     fun cancelVoiceTurn() {
         voiceTimerJob?.cancel()
+        audioEngine?.stopPlayback()
+        audioEngine?.cancelRecording()
         voiceState = VoiceState.IDLE
         voiceLiveTranscript = ""
     }
+
 
     fun addMemory(fact: String, category: String = "Preference") {
         if (fact.isBlank()) return
@@ -506,15 +615,13 @@ class FestoAppState(
     fun deleteMemory(id: String) {
         memories.removeAll { it.id == id }
     }
-
-    private fun generateIntelligentVoiceReply(prompt: String, model: ModelOption): String {
-        return "I heard your spoken request. Using ${model.name}, I've processed the context and updated our shared memory log."
-    }
 }
 
 @Composable
 fun rememberFestoAppState(
     coroutineScope: CoroutineScope = rememberCoroutineScope()
 ): FestoAppState {
-    return remember { FestoAppState(coroutineScope) }
+    val context = androidx.compose.ui.platform.LocalContext.current.applicationContext
+    val audioEngine = remember(context) { VoiceAudioEngine(context) }
+    return remember { FestoAppState(coroutineScope, audioEngine) }
 }

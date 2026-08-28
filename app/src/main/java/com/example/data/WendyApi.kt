@@ -107,6 +107,57 @@ object WendyApi {
         }
     }
 
+    /**
+     * Speech-to-text via the server-side proxy /api/audio/transcribe.
+     * Sends base64-encoded audio bytes; the server holds the OpenRouter key.
+     * Returns the transcribed text, or throws on failure.
+     */
+    @Throws(IOException::class)
+    suspend fun transcribeAudio(audioBase64: String, format: String = "m4a"): String =
+        withContext(Dispatchers.IO) {
+            val body = JSONObject()
+                .put("audio", audioBase64)
+                .put("format", format)
+                .toString()
+                .toRequestBody("application/json; charset=utf-8".toMediaType())
+            val request = Request.Builder()
+                .url("$BASE_URL/api/audio/transcribe")
+                .header("Authorization", "Bearer $API_TOKEN")
+                .post(body)
+                .build()
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    throw IOException("transcribe HTTP ${response.code}: ${response.body?.string()}")
+                }
+                val text = response.body?.string() ?: return@withContext ""
+                val json = JSONObject(text)
+                json.optString("text")
+            }
+        }
+
+    /**
+     * Text-to-speech via the server-side proxy /api/audio/speak.
+     * Returns raw mp3 bytes; the server holds the OpenRouter key.
+     */
+    @Throws(IOException::class)
+    suspend fun synthesizeSpeech(text: String, voice: String? = null): ByteArray =
+        withContext(Dispatchers.IO) {
+            val body = JSONObject().put("text", text).apply {
+                if (voice != null) put("voice", voice)
+            }.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+            val request = Request.Builder()
+                .url("$BASE_URL/api/audio/speak")
+                .header("Authorization", "Bearer $API_TOKEN")
+                .post(body)
+                .build()
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    throw IOException("speak HTTP ${response.code}: ${response.body?.string()}")
+                }
+                response.body?.bytes() ?: ByteArray(0)
+            }
+        }
+
     private fun readStreamingResponse(response: Response, scope: ProducerScope<WendyEvent>) {
         response.use { resp ->
             if (!resp.isSuccessful) {

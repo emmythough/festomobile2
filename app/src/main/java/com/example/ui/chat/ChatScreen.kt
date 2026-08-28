@@ -62,6 +62,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
+import androidx.compose.ui.platform.LocalContext
 import com.example.data.FestoAppState
 import com.example.ui.components.ChatMessageItem
 import com.example.ui.components.ModelBadgeChip
@@ -76,6 +82,34 @@ fun ChatScreen(
     val extendedColors = FestoTheme.colors
     var inputText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
+    val context = LocalContext.current
+
+    // Opens the voice overlay, requesting RECORD_AUDIO permission the first
+    // time. Once granted, starts the real mic recording.
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        appState.onMicPermissionResult(granted)
+        if (granted) {
+            appState.isVoiceOverlayOpen = true
+            appState.startVoiceRecording()
+        } else {
+            appState.isVoiceOverlayOpen = true
+            appState.voiceLiveTranscript = "Microphone permission denied. Enable it in Settings to use voice."
+        }
+    }
+    val openVoice: () -> Unit = {
+        val granted = ContextCompat.checkSelfPermission(
+            context, Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+        appState.onMicPermissionResult(granted)
+        if (granted) {
+            appState.isVoiceOverlayOpen = true
+            appState.startVoiceRecording()
+        } else {
+            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
 
     // Auto-scroll to bottom on new messages
     val messages = appState.activeMessages
@@ -101,10 +135,7 @@ fun ChatScreen(
                 appState = appState,
                 onOpenDrawer = { appState.isDrawerOpen = true },
                 onOpenModelPicker = { appState.isModelSheetOpen = true },
-                onOpenVoice = {
-                    appState.isVoiceOverlayOpen = true
-                    appState.startVoiceRecording()
-                },
+                onOpenVoice = openVoice,
                 onNewChat = { appState.createNewConversation() }
             )
 
@@ -127,10 +158,7 @@ fun ChatScreen(
                         onSelectPrompt = { prompt ->
                             appState.sendMessage(prompt)
                         },
-                        onOpenVoice = {
-                            appState.isVoiceOverlayOpen = true
-                            appState.startVoiceRecording()
-                        }
+                        onOpenVoice = openVoice
                     )
                 } else {
                     LazyColumn(
@@ -156,10 +184,7 @@ fun ChatScreen(
                         appState.sendMessage(text)
                     }
                 },
-                onOpenVoice = {
-                    appState.isVoiceOverlayOpen = true
-                    appState.startVoiceRecording()
-                },
+                onOpenVoice = openVoice,
                 isStreaming = appState.isStreamingResponse
             )
         }
