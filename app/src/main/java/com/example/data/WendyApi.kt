@@ -45,9 +45,20 @@ import java.util.concurrent.TimeUnit
 sealed class WendyEvent {
     /** Full text-so-far, not an increment -- always replace the displayed bubble with this. */
     data class Delta(val text: String) : WendyEvent()
-    data class Final(val text: String) : WendyEvent()
+    data class Final(val text: String, val usage: ServerUsage? = null) : WendyEvent()
     data class Error(val message: String) : WendyEvent()
 }
+
+/** Server-reported token/cost usage for a completed turn. Only present on
+ * final v4 replies -- absent on acks, deltas, instant answers, and failures
+ * (never substitute a local estimate for it). */
+data class ServerUsage(
+    val tier: String? = null,
+    val modelId: String? = null,
+    val promptTokens: Int? = null,
+    val completionTokens: Int? = null,
+    val costUsd: Double? = null
+)
 
 /** One turn from GET /api/history -- role is "user" or "assistant". */
 data class HistoryTurn(val role: String, val text: String, val timestamp: Long)
@@ -94,8 +105,10 @@ object WendyApi {
      * setup (ALLOWED_USER_ID is one fixed id server-side), not fine the day
      * this app supports multiple accounts.
      */
-    fun sendMessage(message: String): Flow<WendyEvent> = callbackFlow {
-        val body = JSONObject().put("message", message).toString()
+    fun sendMessage(message: String, model: String? = null): Flow<WendyEvent> = callbackFlow {
+        val json = JSONObject().put("message", message)
+        if (model != null) json.put("model", model)
+        val body = json.toString()
             .toRequestBody("application/json; charset=utf-8".toMediaType())
         val request = Request.Builder()
             .url("$BASE_URL/api/v4/message")
@@ -153,7 +166,16 @@ object WendyApi {
                         // "On it." placeholder -- server-side UX cue only, nothing to show here.
                     }
                     item.has("blocks") -> {
-                        scope.trySend(WendyEvent.Final(item.optString("speech")))
+                        val usage = item.optJSONObject("usage")?.let { u ->
+                            ServerUsage(
+                                tier = u.optString("tier").ifBlank { null },
+                                modelId = u.optString("model_id").ifBlank { null },
+                                promptTokens = if (u.has("prompt_tokens")) u.getInt("prompt_tokens") else null,
+                                completionTokens = if (u.has("completion_tokens")) u.getInt("completion_tokens") else null,
+                                costUsd = if (u.has("cost_usd")) u.getDouble("cost_usd") else null
+                            )
+                        }
+                        scope.trySend(WendyEvent.Final(item.optString("speech"), usage))
                         return // this turn is done; stop polling
                     }
                     item.has("error") -> {
@@ -167,6 +189,40 @@ object WendyApi {
             }
         }
         scope.trySend(WendyEvent.Error("timed out waiting for a reply"))
+    }
+
+    /** Fetches the server's available model tiers via GET /api/v4/models.
+     * Returns an empty list on any failure rather than throwing -- the
+     * model picker falls back to whatever it has locally. */
+    suspend fun fetchModels(): List<ModelOption> = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url("$BASE_URL/api/v4/models")
+            .header("Authorization", "Bearer $API_TOKEN")
+            .get()
+            .build()
+        try {
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@withContext emptyList()
+                val bodyText = response.body?.string() ?: return@withContext emptyList()
+                val array = JSONObject(bodyText).optJSONArray("models")
+                    ?: return@withContext emptyList()
+                (0 until array.length()).mapNotNull { i ->
+                    val obj = array.getJSONObject(i)
+                    val id = obj.optString("id")
+                    if (id.isBlank()) return@mapNotNull null
+                    ModelOption(
+                        id = id,
+                        label = obj.optString("label"),
+                        modelId = obj.optString("model_id"),
+                        inputCostPerMtok = obj.optDouble("input_cost_per_mtok", 0.0),
+                        outputCostPerMtok = obj.optDouble("output_cost_per_mtok", 0.0),
+                        isDefault = obj.optBoolean("is_default")
+                    )
+                }
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
     }
 
     /** Fetches recent conversation history from Gen 1's still-live history
