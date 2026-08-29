@@ -1,13 +1,19 @@
 package com.example.ui.components
 
 import android.widget.Toast
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -170,12 +176,27 @@ fun ChatMessageItem(
                         Spacer(modifier = Modifier.height(6.dp))
                     }
 
-                    // Content rendering
+                    // Content rendering. While streaming, wrap each growth in
+                    // AnimatedContent so v4's throttled ~1.5s edits crossfade
+                    // instead of snapping the whole bubble to new text -- a
+                    // static (already-complete) message renders directly,
+                    // no animation overhead once the turn is done.
                     if (message.content.isNotBlank()) {
-                        FormattedMessageContent(
-                            content = message.content,
-                            isUser = isUser
-                        )
+                        if (message.isStreaming) {
+                            AnimatedContent(
+                                targetState = message.content,
+                                transitionSpec = {
+                                    (fadeIn(tween(180, delayMillis = 60)) + slideInVertically(tween(180)) { it / 6 })
+                                        .togetherWith(fadeOut(tween(90)))
+                                        .using(SizeTransform(clip = false))
+                                },
+                                label = "streaming_content"
+                            ) { animatedContent ->
+                                FormattedMessageContent(content = animatedContent, isUser = isUser)
+                            }
+                        } else {
+                            FormattedMessageContent(content = message.content, isUser = isUser)
+                        }
                     } else if (message.isStreaming) {
                         StreamingDotsIndicator()
                     }

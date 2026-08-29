@@ -418,11 +418,12 @@ private fun ConversationDrawerItem(
                     tint = if (isSelected) extendedColors.brandNova else extendedColors.inkTertiary,
                     modifier = Modifier.size(15.dp)
                 )
-                Column {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(
                         text = conv.title,
                         style = MaterialTheme.typography.bodyMedium.copy(
                             fontSize = 13.sp,
+                            lineHeight = 16.sp,
                             fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal
                         ),
                         color = MaterialTheme.colorScheme.onSurface,
@@ -434,6 +435,7 @@ private fun ConversationDrawerItem(
                             text = conv.preview,
                             style = MaterialTheme.typography.bodySmall.copy(
                                 fontSize = 11.sp,
+                                lineHeight = 14.sp,
                                 color = extendedColors.inkTertiary
                             ),
                             maxLines = 1,

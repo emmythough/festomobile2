@@ -1,6 +1,10 @@
 package com.example.ui.chat
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
@@ -167,7 +171,16 @@ fun ChatScreen(
                         contentPadding = PaddingValues(vertical = 12.dp)
                     ) {
                         items(messages, key = { it.id }) { msg ->
-                            ChatMessageItem(message = msg)
+                            ChatMessageItem(
+                                message = msg,
+                                modifier = Modifier.animateItem(
+                                    fadeInSpec = tween(220, easing = FastOutSlowInEasing),
+                                    placementSpec = spring(
+                                        dampingRatio = Spring.DampingRatioNoBouncy,
+                                        stiffness = Spring.StiffnessMediumLow
+                                    )
+                                )
+                            )
                         }
                     }
                 }
