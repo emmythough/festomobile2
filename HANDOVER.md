@@ -149,38 +149,81 @@ the finished message directly from opencode rather than returning
 nothing. Verified live before and after (reproduced the empty reply,
 then confirmed `'pong'` came through).
 
-**In progress, dispatched as background engineers, status as of
-writing — check `git log` in `Wendy-Prototype` for what actually
-landed:**
-- A real Telegram listener for the Mechanic (`status`/`help`
-  commands), read-only, never executes remediation from chat, ignores
-  anyone but you, and is explicitly required to never say "all normal"
-  when its own poll fails.
-- A blank-reply probe reading the real turn log, plus a reply-recency
-  probe — the exact gauges that would have caught tonight.
-- A full instrument panel: every v4 service, every local endpoint,
-  Redis (v4's message bus, currently completely unwatched), OpenRouter
-  credit balance (you're at ~$7.45 of $10 — nothing watches this either;
-  when it hits zero everything stops answering and every existing gauge
-  stays green), swap, and load average.
+**Status as of the end of this session — genuinely incomplete, said
+plainly rather than glossed over:**
 
-**If any of these did not land cleanly, the exact prompts I gave the
-engineers are in this session's scratchpad
-(`dc_probes.txt`, `dc_mechtg.txt`, `dc_fullpanel.txt`) — re-run them
-verbatim rather than re-deriving the spec.**
+- Two background engineers were dispatched for the blank-reply/recency
+  probes and the Telegram listener. The first attempt on both **hung
+  for 25+ minutes with zero file changes and near-frozen CPU** — a real
+  stall, not just a slow complex task (confirmed by comparison against
+  every other engineer tonight, all of which showed real CPU movement).
+  Killed and relaunched both fresh; **check `git log` in
+  `Wendy-Prototype`'s `v4/` and `mechanic/` dirs for whether the second
+  attempt actually landed** — I could not wait out a third full cycle
+  before this handover was written.
+- **The full instrument panel (Redis, all 8 v4 services, endpoint
+  reachability, OpenRouter credit balance, swap, load average) was
+  never dispatched a second time** — deliberately deferred rather than
+  risk a third long hang eating the remaining session. Its complete,
+  ready-to-run prompt is saved at
+  `dc_fullpanel.txt` in this session's scratchpad
+  (`C:\Users\emmya\AppData\Local\Temp\claude\...\scratchpad\`, exact
+  path will differ next session — ask me to regenerate it if it's
+  gone). Nothing needs re-deriving; it can be handed to a fresh
+  `deepcode -x -p` call as-is.
+- **Whatever the outcome, the Mechanic's actual biggest gap — the
+  OpenRouter balance at ~$7.45 of $10 with zero monitoring — is still
+  live and unwatched right now.** When it hits zero, every reply stops
+  and every existing probe stays green, because none of them check
+  spend. This is the single highest-value gauge in the whole full-panel
+  prompt if only one more thing gets built.
 
 ---
 
-## 5. Full mobile-app audit — dispatched, check for `AUDIT_REPORT.md`
+## 5. Full mobile-app audit — DONE, `AUDIT_REPORT.md` has the full findings
 
-A read-only audit engineer was dispatched against this exact repo to
-check every screen, every button, every icon for real-vs-decorative
-behavior, cross-referenced against the current live backend contract.
-**If `festomobile2/AUDIT_REPORT.md` exists, read it before trusting any
-"it just works" claim about a screen not mentioned elsewhere in this
-document.** It was explicitly told there is no emulator/device in this
-environment and to say "cannot verify without a device" rather than
-guess for anything needing a real screen tap.
+A read-only audit engineer checked every screen, button, and call path
+against the real live backend. It found 8 real bugs and 8 "the UI
+states something the code doesn't do" honesty issues — genuinely good,
+specific work (every finding cites file:line). **Six of the bugs are
+fixed, verified, and shipped** (commit `1297897`):
+
+1. A real ANR risk **I introduced an hour earlier** shipping file
+   attachments — reading the picked file's bytes on the main thread
+   with no size check first. Moved to a background dispatcher.
+2. Voice failures were **completely silent** — the error was written
+   into a message, then that exact message was deleted two lines later,
+   and the caller returned null with nothing shown anywhere. Now
+   surfaces to the voice overlay's real transcript field.
+3. Model picker said "Loading models..." **forever** on a failed fetch,
+   with no way to tell slow from broken and no retry. Added both.
+4. `VoicePipelineTest` was genuinely red — it tested a state the app's
+   own safety guards correctly prevent. Rewritten to test the guard
+   itself; ran it for real: 2/2 passing, not assumed.
+5. A regex bug in the code-fence parser used a line-boundary anchor as
+   its "reached the end of a streaming reply" fallback, which could
+   close an unterminated code block early at its own internal line
+   breaks. Replaced with the correct true-end-of-input anchor.
+6. Two factually wrong captions (claimed 24kHz-to-OpenRouter audio when
+   it's really 16kHz to this app's own proxy; a starter card named
+   three models — Gemini 2.5 Flash, Sonnet 4.5, GLM 5.3 — that don't
+   exist in the real, live model list).
+
+**Not fixed tonight — real judgment calls, not oversights, see §6:**
+the auth screen always succeeds with pre-filled demo credentials
+(pure theater); the memory sheet shows three hardcoded fake facts as if
+they were real, distilled memory; the drawer presents multiple
+conversation threads when the backend has exactly one shared session.
+`RealVoiceEngine.kt` is confirmed **zero-reference dead code** — the
+on-device SpeechRecognizer/TTS engine from the earlier AI Studio
+divergence was never wired to anything. Delete it or wire it; leaving
+~240 unreferenced lines around is exactly the kind of thing that caused
+tonight's two-backend split in the first place.
+
+A meaningful chunk of `AUDIT_REPORT.md` is genuinely reassuring, not
+just a bug list: every "does X show a real number or an estimate"
+question came back clean — server-reported cost/tokens are honored
+everywhere, no client-side estimation slipped back in.
 
 ---
 

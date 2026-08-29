@@ -125,7 +125,13 @@ class FestoAppState(
         private set
 
     // Cross-session Memories
-    val memories = mutableStateListOf<MemoryFact>().apply { addAll(MockData.initialMemories) }
+    // Was seeded with 3 fabricated facts (fake infra details, a made-up
+    // voice protocol spec) presented as if real, distilled memory --
+    // confirmed nothing here ever reaches Wendy or comes from her (see
+    // MemorySheet.kt's honesty-relabeled header). Starting empty until
+    // this is wired to a real memory API is the honest state, not
+    // "worse than no data" like the fake seed was.
+    val memories = mutableStateListOf<MemoryFact>()
     var memorySearchQuery by mutableStateOf("")
 
     // Usage & Cost tracking

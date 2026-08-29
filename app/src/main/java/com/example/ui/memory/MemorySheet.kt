@@ -41,6 +41,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -120,7 +121,16 @@ fun MemorySheet(
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            text = "${appState.memories.size} durable facts distilled across threads",
+                            // Was "N durable facts distilled across
+                            // threads" -- these notes are local-only right
+                            // now (never sent to Wendy, never distilled by
+                            // her); said plainly instead of implying a real
+                            // pipeline that doesn't exist yet.
+                            text = if (appState.memories.isEmpty()) {
+                                "Personal notes, kept on this device only"
+                            } else {
+                                "${appState.memories.size} note${if (appState.memories.size == 1) "" else "s"} -- local to this device, not yet shared with Wendy"
+                            },
                             style = MaterialTheme.typography.bodySmall.copy(
                                 fontSize = 12.sp,
                                 color = extendedColors.inkTertiary
@@ -253,15 +263,43 @@ fun MemorySheet(
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            // Memory Facts List
-            LazyColumn(
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(filteredMemories, key = { it.id }) { fact ->
-                    MemoryFactItemCard(
-                        fact = fact,
-                        onDelete = { appState.deleteMemory(fact.id) }
+            if (appState.memories.isEmpty()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 28.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Psychology,
+                        contentDescription = null,
+                        tint = extendedColors.inkTertiary.copy(alpha = 0.5f),
+                        modifier = Modifier.size(32.dp)
                     )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = "No notes yet",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = extendedColors.inkTertiary
+                    )
+                    Text(
+                        text = "Save something above -- it stays on this device only.",
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
+                        color = extendedColors.inkTertiary,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            } else {
+                // Memory Facts List
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(filteredMemories, key = { it.id }) { fact ->
+                        MemoryFactItemCard(
+                            fact = fact,
+                            onDelete = { appState.deleteMemory(fact.id) }
+                        )
+                    }
                 }
             }
         }
