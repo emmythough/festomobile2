@@ -37,6 +37,8 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.AttachFile
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Bolt
+import androidx.compose.material.icons.rounded.Build
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.GraphicEq
@@ -72,6 +74,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -80,6 +83,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
 import androidx.compose.ui.platform.LocalContext
+import com.example.data.BackendMode
 import com.example.data.FestoAppState
 import com.example.ui.components.ChatMessageItem
 import com.example.ui.components.ModelBadgeChip
@@ -180,6 +184,28 @@ fun ChatScreen(
                 }
             }
 
+            // Hermes notice chip -- same dismissible-chip pattern as
+            // sessionResetError above: covers "no session picked yet",
+            // fresh-chat attempts in Hermes mode, and other situations
+            // the gateway genuinely can't serve.
+            appState.hermesNotice?.let { notice ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 6.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(extendedColors.accentAmberSoft)
+                        .clickable { appState.hermesNotice = null }
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = notice,
+                        style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.sp),
+                        color = extendedColors.accentAmber
+                    )
+                }
+            }
+
             // Message Stream List or Empty Starter State
             Box(
                 modifier = Modifier
@@ -212,6 +238,44 @@ fun ChatScreen(
                             )
                         }
                     }
+                }
+            }
+
+            // Hermes tool activity -- while the gateway runs a tool
+            // (tool.started / tool.progress / ... frames), show what it's
+            // doing as a live line above the composer. Cleared the moment
+            // assistant text starts flowing again or the turn ends.
+            appState.streamingTool?.let { tool ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp)
+                        .padding(bottom = 4.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(extendedColors.surfaceSubtle)
+                        .border(1.dp, extendedColors.borderHairline, RoundedCornerShape(14.dp))
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                        .testTag("hermes_tool_activity"),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Build,
+                        contentDescription = null,
+                        tint = extendedColors.brandNova,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Text(
+                        text = if (tool.detail.isBlank()) {
+                            "${tool.toolName}..."
+                        } else {
+                            "${tool.toolName} - ${tool.detail}"
+                        },
+                        style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.sp),
+                        color = extendedColors.inkTertiary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
             }
 
@@ -275,10 +339,16 @@ private fun ChatTopBar(
                 )
             }
 
-            ModelBadgeChip(
-                model = appState.selectedModel,
-                onClick = onOpenModelPicker
-            )
+            if (appState.backendMode == BackendMode.HERMES) {
+                // Hermes mode has no model switch (the gateway picks) --
+                // show which backend is live instead of the model chip.
+                HermesBackendBadge()
+            } else {
+                ModelBadgeChip(
+                    model = appState.selectedModel,
+                    onClick = onOpenModelPicker
+                )
+            }
         }
 
         Row(
@@ -302,19 +372,55 @@ private fun ChatTopBar(
                 )
             }
 
-            // New Conversation Action
-            IconButton(
-                onClick = onNewChat,
-                modifier = Modifier.size(36.dp).testTag("new_chat_button")
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.Add,
-                    contentDescription = "New Chat",
-                    tint = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.size(22.dp)
-                )
+            // New Conversation Action -- Gen 1 only: Hermes mode shares
+            // ONE session with Telegram, there's nothing fresh to start.
+            if (appState.backendMode == BackendMode.GEN1) {
+                IconButton(
+                    onClick = onNewChat,
+                    modifier = Modifier.size(36.dp).testTag("new_chat_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Add,
+                        contentDescription = "New Chat",
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
             }
         }
+    }
+}
+
+/** Static backend badge shown in the top bar while on the Hermes
+ * gateway -- the model chip would be a lie here (the gateway picks the
+ * model), so this just says which brain you're talking to. */
+@Composable
+private fun HermesBackendBadge() {
+    val extendedColors = FestoTheme.colors
+    Row(
+        modifier = Modifier
+            .testTag("backend_badge_chip")
+            .clip(RoundedCornerShape(20.dp))
+            .background(extendedColors.brandNovaSoft)
+            .border(1.dp, extendedColors.brandNovaLine, RoundedCornerShape(20.dp))
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.Bolt,
+            contentDescription = null,
+            tint = extendedColors.brandNova,
+            modifier = Modifier.size(14.dp)
+        )
+        Text(
+            text = "Hermes gateway",
+            style = MaterialTheme.typography.labelMedium.copy(
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 12.5.sp
+            ),
+            color = MaterialTheme.colorScheme.onSurface
+        )
     }
 }
 

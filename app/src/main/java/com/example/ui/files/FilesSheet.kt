@@ -51,6 +51,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.BackendMode
 import com.example.data.FestoAppState
 import com.example.data.OutboxDownload
 import com.example.data.OutboxFile
@@ -85,7 +86,13 @@ fun FilesSheet(
 
     LaunchedEffect(Unit) {
         isLoading = true
-        files.addAll(WendyApi.fetchOutbox())
+        // The outbox lives on Wendy's own server (Gen 1). The Hermes
+        // gateway has no file queue -- skip the call instead of asking a
+        // server this backend mode doesn't use; the honest empty state
+        // below explains.
+        if (appState.backendMode != BackendMode.HERMES) {
+            files.addAll(WendyApi.fetchOutbox())
+        }
         isLoading = false
     }
 
@@ -250,7 +257,11 @@ fun FilesSheet(
                             color = extendedColors.inkTertiary
                         )
                         Text(
-                            text = "Files Wendy builds for you will show up here.",
+                            text = if (appState.backendMode == BackendMode.HERMES) {
+                                "The Hermes gateway has no file queue -- Wendy's outbox is a Gen 1 feature."
+                            } else {
+                                "Files Wendy builds for you will show up here."
+                            },
                             style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
                             color = extendedColors.inkTertiary,
                             textAlign = TextAlign.Center

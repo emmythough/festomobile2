@@ -45,6 +45,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.BackendMode
 import com.example.data.FestoAppState
 import com.example.data.WendyApi
 import com.example.ui.components.NovaAvatar
@@ -59,9 +60,16 @@ fun ConversationDrawer(
     val extendedColors = FestoTheme.colors
 
     // No polling loop -- the badge just re-checks once per drawer open.
+    // The outbox is a Gen 1 concept (Wendy's own server); the Hermes
+    // gateway has no file queue, so HERMES mode skips the call entirely
+    // rather than querying a server it isn't using.
     LaunchedEffect(appState.isDrawerOpen) {
         if (appState.isDrawerOpen) {
-            appState.outboxPendingCount = WendyApi.fetchOutbox().size
+            appState.outboxPendingCount = if (appState.backendMode == BackendMode.HERMES) {
+                0
+            } else {
+                WendyApi.fetchOutbox().size
+            }
         }
     }
 
@@ -117,34 +125,40 @@ fun ConversationDrawer(
 
             // Start Fresh Action Button -- resets the ONE real server-side
             // session (shared with Telegram), not a fake local thread.
-            Button(
-                onClick = { appState.startFreshConversation() },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(42.dp)
-                    .testTag("new_chat_drawer_button"),
-                shape = RoundedCornerShape(21.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = extendedColors.brandNova,
-                    contentColor = Color.White
-                )
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+            // Gen 1 only: Hermes mode shares one continuous gateway
+            // session with Telegram by design, so there's nothing to
+            // reset -- the top bar hides its own new-chat button there
+            // too.
+            if (appState.backendMode == BackendMode.GEN1) {
+                Button(
+                    onClick = { appState.startFreshConversation() },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(42.dp)
+                        .testTag("new_chat_drawer_button"),
+                    shape = RoundedCornerShape(21.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = extendedColors.brandNova,
+                        contentColor = Color.White
+                    )
                 ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Add,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Text(
-                        text = "Start Fresh",
-                        style = MaterialTheme.typography.labelMedium.copy(
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 13.5.sp
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Add,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
                         )
-                    )
+                        Text(
+                            text = "Start Fresh",
+                            style = MaterialTheme.typography.labelMedium.copy(
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 13.5.sp
+                            )
+                        )
+                    }
                 }
             }
 
