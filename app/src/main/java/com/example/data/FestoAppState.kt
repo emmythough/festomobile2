@@ -29,12 +29,12 @@ class FestoAppState(
 ) {
     companion object {
         private const val MAIN_CONVERSATION_ID = "wendy-main"
+        // Used only until the real GET /api/model call returns (or if it
+        // ever fails) -- "flash" matches bridge.py's own DEFAULT_MODEL, so
+        // this reflects the truth even before the network round trip.
         private val FALLBACK_MODEL = ModelOption(
-            id = "voice",
-            label = "Balanced",
+            id = "flash",
             modelId = "openrouter/google/gemini-3.7-flash",
-            inputCostPerMtok = 0.375,
-            outputCostPerMtok = 1.875,
             isDefault = true
         )
     }

@@ -283,7 +283,7 @@ private fun ModelOptionCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Context: ${model.contextDisplay}",
+                    text = model.modelId,
                     style = MaterialTheme.typography.labelSmall.copy(
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Medium
@@ -292,7 +292,12 @@ private fun ModelOptionCard(
                 )
 
                 Text(
-                    text = "In: $${String.format(Locale.US, "%.3f", model.inputCostPerMtok)} / Out: $${String.format(Locale.US, "%.3f", model.outputCostPerMtok)} /Mtok",
+                    // No static per-tier price to show here: Gen 1 doesn't
+                    // quote one up front, only after a real turn completes
+                    // (see the cost line under each reply). Showing "$0.000"
+                    // would read as "free," which is worse than showing
+                    // nothing.
+                    text = "Cost shown after reply",
                     style = MaterialTheme.typography.labelSmall.copy(
                         fontSize = 10.5.sp,
                         fontWeight = FontWeight.Medium
