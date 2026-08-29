@@ -35,6 +35,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -54,6 +56,7 @@ fun ModelPickerSheet(
     sheetState: SheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 ) {
     val extendedColors = FestoTheme.colors
+    val hapticFeedback = LocalHapticFeedback.current
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -190,6 +193,7 @@ fun ModelPickerSheet(
                             model = model,
                             isSelected = model.id == appState.selectedModel.id,
                             onSelect = {
+                                hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                 appState.selectModel(model)
                                 onDismiss()
                             }

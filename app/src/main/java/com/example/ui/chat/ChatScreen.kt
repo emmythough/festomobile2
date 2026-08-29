@@ -67,6 +67,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -446,6 +448,7 @@ private fun ChatComposer(
     val extendedColors = FestoTheme.colors
     val context = LocalContext.current
     val composerScope = rememberCoroutineScope()
+    val hapticFeedback = LocalHapticFeedback.current
     val canSend = (inputText.isNotBlank() || pendingAttachmentFilename != null) && !isStreaming
 
     // Storage Access Framework picker -- no runtime permission needed
@@ -469,6 +472,10 @@ private fun ChatComposer(
                 val bytes = resolver.openInputStream(uri)?.use { it.readBytes() }
                 withContext(Dispatchers.Main) {
                     if (bytes != null) {
+                        // Light tick on a successful pick only -- read
+                        // failures below stay silent (the amber error chip
+                        // is the feedback there).
+                        hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         onPickAttachment(name, bytes)
                     } else {
                         onAttachmentReadFailed(name)
@@ -606,7 +613,12 @@ private fun ChatComposer(
                     .size(36.dp)
                     .clip(CircleShape)
                     .background(if (canSend) extendedColors.brandNova else extendedColors.surfaceContainer)
-                    .clickable(enabled = canSend, onClick = onSend)
+                    .clickable(enabled = canSend) {
+                        // One light tick per actual send -- the enabled
+                        // gate means disabled taps stay silent.
+                        hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        onSend()
+                    }
                     .testTag("chat_send_button"),
                 contentAlignment = Alignment.Center
             ) {

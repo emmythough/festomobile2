@@ -24,6 +24,7 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DataUsage
 import androidx.compose.material.icons.rounded.Logout
 import androidx.compose.material.icons.rounded.Psychology
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Divider
@@ -231,6 +232,51 @@ fun ConversationDrawer(
                         fontWeight = FontWeight.Bold,
                         fontSize = 10.sp,
                         color = extendedColors.accentGreen
+                    )
+                )
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(extendedColors.surfaceSubtle)
+                    .border(1.dp, extendedColors.borderHairline, RoundedCornerShape(10.dp))
+                    .clickable {
+                        onClose()
+                        appState.isSettingsSheetOpen = true
+                    }
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Settings,
+                        contentDescription = null,
+                        tint = extendedColors.accentPurple,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = "Settings",
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 12.5.sp
+                        ),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+                Text(
+                    text = appState.themeMode.label,
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 10.sp,
+                        color = extendedColors.inkTertiary
                     )
                 )
             }

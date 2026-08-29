@@ -25,7 +25,12 @@ enum class AuthMode {
 @Stable
 class FestoAppState(
     val coroutineScope: CoroutineScope,
-    private val audioEngine: VoiceAudioEngine? = null
+    private val audioEngine: VoiceAudioEngine? = null,
+    /** Persisted-settings store for the theme override. Nullable so the
+     * existing two-arg construction (unit tests) keeps working; the real
+     * app path always provides it via rememberFestoAppState(). */
+    private val themePrefs: ThemePreferences? = null,
+    initialThemeMode: ThemeMode = ThemeMode.SYSTEM
 ) {
     companion object {
         private const val MAIN_CONVERSATION_ID = "wendy-main"
@@ -142,7 +147,25 @@ class FestoAppState(
     var isModelSheetOpen by mutableStateOf(false)
     var isMemorySheetOpen by mutableStateOf(false)
     var isUsageSheetOpen by mutableStateOf(false)
+    var isSettingsSheetOpen by mutableStateOf(false)
     var isVoiceOverlayOpen by mutableStateOf(false)
+
+    // Settings: theme override (System / Light / Dark). The initial value
+    // comes from the persisted store, read in MainActivity.onCreate BEFORE
+    // any compose content is set; setThemeMode() writes through to the
+    // same store so the choice survives relaunch. Backed by a private
+    // state field because a delegated var's generated JVM setter would
+    // clash with setThemeMode()'s signature.
+    private var _themeMode by mutableStateOf(initialThemeMode)
+
+    val themeMode: ThemeMode
+        get() = _themeMode
+
+    fun setThemeMode(mode: ThemeMode) {
+        if (mode == _themeMode) return
+        _themeMode = mode
+        themePrefs?.save(mode)
+    }
 
     /** A file picked in the composer, waiting to ride on the next sent
      * message. Cleared once sendMessage() consumes it (success or
@@ -702,9 +725,11 @@ class FestoAppState(
 
 @Composable
 fun rememberFestoAppState(
-    coroutineScope: CoroutineScope = rememberCoroutineScope()
+    coroutineScope: CoroutineScope = rememberCoroutineScope(),
+    initialThemeMode: ThemeMode = ThemeMode.SYSTEM
 ): FestoAppState {
     val context = androidx.compose.ui.platform.LocalContext.current.applicationContext
     val audioEngine = remember(context) { VoiceAudioEngine(context) }
-    return remember { FestoAppState(coroutineScope, audioEngine) }
+    val themePrefs = remember(context) { ThemePreferences(context) }
+    return remember { FestoAppState(coroutineScope, audioEngine, themePrefs, initialThemeMode) }
 }

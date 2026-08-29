@@ -2,8 +2,12 @@ package com.example.ui
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -27,6 +31,7 @@ import com.example.ui.chat.ChatScreen
 import com.example.ui.drawer.ConversationDrawer
 import com.example.ui.memory.MemorySheet
 import com.example.ui.models.ModelPickerSheet
+import com.example.ui.settings.SettingsScreen
 import com.example.ui.usage.UsageSheet
 import com.example.ui.voice.VoiceOverlay
 
@@ -46,11 +51,14 @@ fun AppRoot(
                 // Main Chat Screen
                 ChatScreen(appState = appState)
 
-                // Slide-over Navigation Drawer Layer
+                // Slide-over Navigation Drawer Layer. The scrim fades while
+                // the drawer itself slides in from the left edge -- same
+                // tween(220, FastOutSlowInEasing) curve the message list
+                // uses -- so it opens from the edge instead of materializing.
                 AnimatedVisibility(
                     visible = appState.isDrawerOpen,
-                    enter = fadeIn(),
-                    exit = fadeOut()
+                    enter = fadeIn(tween(220, easing = FastOutSlowInEasing)),
+                    exit = fadeOut(tween(220, easing = FastOutSlowInEasing))
                 ) {
                     Box(
                         modifier = Modifier
@@ -60,13 +68,22 @@ fun AppRoot(
                                 interactionSource = remember { MutableInteractionSource() },
                                 indication = null
                             ) { appState.isDrawerOpen = false }
-                    ) {
-                        ConversationDrawer(
-                            appState = appState,
-                            onClose = { appState.isDrawerOpen = false },
-                            modifier = Modifier.align(Alignment.CenterStart)
-                        )
-                    }
+                    )
+                }
+                AnimatedVisibility(
+                    visible = appState.isDrawerOpen,
+                    enter = slideInHorizontally(
+                        animationSpec = tween(220, easing = FastOutSlowInEasing)
+                    ) { -it } + fadeIn(tween(220, easing = FastOutSlowInEasing)),
+                    exit = slideOutHorizontally(
+                        animationSpec = tween(220, easing = FastOutSlowInEasing)
+                    ) { -it } + fadeOut(tween(220, easing = FastOutSlowInEasing)),
+                    modifier = Modifier.align(Alignment.CenterStart)
+                ) {
+                    ConversationDrawer(
+                        appState = appState,
+                        onClose = { appState.isDrawerOpen = false }
+                    )
                 }
 
                 // Modal Model Picker Bottom Sheet
@@ -90,6 +107,14 @@ fun AppRoot(
                     UsageSheet(
                         appState = appState,
                         onDismiss = { appState.isUsageSheetOpen = false }
+                    )
+                }
+
+                // Modal Settings Bottom Sheet
+                if (appState.isSettingsSheetOpen) {
+                    SettingsScreen(
+                        appState = appState,
+                        onDismiss = { appState.isSettingsSheetOpen = false }
                     )
                 }
 
