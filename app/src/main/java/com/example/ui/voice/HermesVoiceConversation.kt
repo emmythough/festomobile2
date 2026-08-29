@@ -247,7 +247,9 @@ class HermesVoiceConversation(
     }
 
     /** Mute switch: pauses TTS speaking only. Unmuting takes effect on the
-     * NEXT reply (a cut-off utterance is not re-spoken). */
+     * NEXT reply (a cut-off utterance is not re-spoken). @JvmName avoids the
+     * JVM-signature clash with the `muted` property's private setter. */
+    @JvmName("setMutedState")
     fun setMuted(value: Boolean) {
         if (muted == value) return
         muted = value
