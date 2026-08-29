@@ -8,6 +8,8 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
+import com.example.data.BackendMode
+import com.example.data.BackendPreferences
 import com.example.data.ThemeMode
 import com.example.data.ThemePreferences
 import com.example.data.rememberFestoAppState
@@ -24,13 +26,19 @@ class MainActivity : ComponentActivity() {
         // the user's chosen scheme -- no flash of the system default, and
         // the choice survives a real app relaunch.
         val initialThemeMode = ThemePreferences(applicationContext).load()
+        // Same story for the backend mode (Gen 1 direct vs Hermes
+        // gateway): the first frame must already reflect the choice.
+        val initialBackendMode = BackendPreferences(applicationContext).loadMode()
 
         setContent {
             // Hoisted out of AppRoot() so MyApplicationTheme below and
             // AppRoot's sheets share ONE FestoAppState instance: the
             // Settings sheet writes appState.themeMode, and the lambda
             // here recomposes the color scheme live in the same frame.
-            val appState = rememberFestoAppState(initialThemeMode = initialThemeMode)
+            val appState = rememberFestoAppState(
+                initialThemeMode = initialThemeMode,
+                initialBackendMode = initialBackendMode
+            )
             val darkTheme = when (appState.themeMode) {
                 ThemeMode.SYSTEM -> isSystemInDarkTheme()
                 ThemeMode.LIGHT -> false

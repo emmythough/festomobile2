@@ -30,7 +30,13 @@ class FestoAppState(
      * existing two-arg construction (unit tests) keeps working; the real
      * app path always provides it via rememberFestoAppState(). */
     private val themePrefs: ThemePreferences? = null,
-    initialThemeMode: ThemeMode = ThemeMode.SYSTEM
+    initialThemeMode: ThemeMode = ThemeMode.SYSTEM,
+    /** Persisted-settings store for backend mode + Hermes gateway config
+     * (base URL, API key, shared Wendy session id). Same nullable pattern
+     * as themePrefs: unit tests construct without it and stay on the
+     * legacy backend, untouched. */
+    private val backendPrefs: BackendPreferences? = null,
+    initialBackendMode: BackendMode = BackendMode.GEN1
 ) {
     companion object {
         private const val MAIN_CONVERSATION_ID = "wendy-main"
@@ -55,6 +61,12 @@ class FestoAppState(
     var modelsLoadFailed by mutableStateOf(false)
 
     suspend fun loadRealModels() {
+        // The model picker is a Gen 1 concept (GET /api/model on Wendy's
+        // own server, shared with Telegram's /model command). Hermes has
+        // no model switch -- the gateway picks -- so in HERMES mode this
+        // is deliberately a no-op and the top bar shows a static badge
+        // instead of the model chip.
+        if (_backendMode == BackendMode.HERMES) return
         modelsLoadFailed = false
         val models = WendyApi.fetchModels()
         if (models.isNotEmpty()) {
@@ -72,6 +84,19 @@ class FestoAppState(
     }
 
     private suspend fun loadRealHistory() {
+        // Each backend owns its own transcript truth: Gen 1 reads
+        // /api/history off Wendy's server; Hermes reads the shared
+        // gateway session's messages. Switching backends reloads from
+        // the newly active one.
+        if (_backendMode == BackendMode.HERMES) {
+            loadHermesHistory()
+        } else {
+            loadGen1History()
+        }
+        isHistoryLoading = false
+    }
+
+    private suspend fun loadGen1History() {
         val history = WendyApi.fetchHistory()
         if (history.isNotEmpty()) {
             val messages = messagesMap.getOrPut(MAIN_CONVERSATION_ID) { mutableStateListOf() }
@@ -96,7 +121,45 @@ class FestoAppState(
                 )
             }
         }
-        isHistoryLoading = false
+    }
+
+    /** Loads the shared Hermes session's transcript. Nothing is rendered
+     * until a session is picked (Settings does that); tool/system rows
+     * are skipped -- they're Wendy's plumbing, not conversation bubbles. */
+    private suspend fun loadHermesHistory() {
+        val messages = messagesMap.getOrPut(MAIN_CONVERSATION_ID) { mutableStateListOf() }
+        val sessionId = hermesSessionId
+        if (sessionId == null) {
+            messages.clear()
+            return
+        }
+        val entries = HermesApi.fetchMessages(hermesBaseUrl, hermesApiKey, sessionId)
+        messages.clear()
+        entries.forEachIndexed { index, entry ->
+            val role = when (entry.role) {
+                "user" -> Role.USER
+                "assistant" -> Role.ASSISTANT
+                else -> return@forEachIndexed
+            }
+            messages.add(
+                Message(
+                    id = "hmsg-$index",
+                    conversationId = MAIN_CONVERSATION_ID,
+                    role = role,
+                    content = entry.content,
+                    timestamp = entry.createdAtMs ?: System.currentTimeMillis(),
+                )
+            )
+        }
+        val idx = conversations.indexOfFirst { it.id == MAIN_CONVERSATION_ID }
+        if (idx != -1 && entries.isNotEmpty()) {
+            val last = entries.last()
+            conversations[idx] = conversations[idx].copy(
+                preview = last.content.take(60),
+                messageCount = entries.size,
+                updatedAt = last.createdAtMs ?: System.currentTimeMillis(),
+            )
+        }
     }
 
     // Auth State
@@ -171,6 +234,119 @@ class FestoAppState(
         _themeMode = mode
         themePrefs?.save(mode)
     }
+
+    // ---- Backend mode (Gen 1 direct vs Hermes gateway) ----
+    // Same persisted-settings pattern as the theme above: the initial
+    // value comes from the store (read before construction finishes),
+    // writes go through the same store. GEN1 is the hard default --
+    // adding Hermes must never change behavior for someone who hasn't
+    // opted in.
+    private var _backendMode by mutableStateOf(initialBackendMode)
+
+    val backendMode: BackendMode
+        get() = _backendMode
+
+    /** Switches backend at runtime: cancels any in-flight stream (its
+     * finalize block won't run, so the composer is unfrozen here), clears
+     * the transcript, and reloads history + (for Gen 1) models from the
+     * newly active backend. */
+    fun setBackendMode(mode: BackendMode) {
+        if (mode == _backendMode) return
+        streamingJob?.cancel()
+        streamingTool = null
+        hermesNotice = null
+        isStreamingResponse = false
+        _backendMode = mode
+        backendPrefs?.saveMode(mode)
+        messagesMap[MAIN_CONVERSATION_ID]?.clear()
+        isHistoryLoading = true
+        coroutineScope.launch {
+            if (mode == BackendMode.GEN1) loadRealModels()
+            loadRealHistory()
+        }
+    }
+
+    // ---- Hermes gateway state (only consulted in HERMES mode) ----
+    // Shared-session mode is the point: the app chats inside ONE gateway
+    // session that Telegram also uses. hermesSessionId is that session;
+    // run.completed's session_id is authoritative (compression may rotate
+    // it) and is persisted back on every turn.
+
+    var hermesBaseUrl by mutableStateOf(backendPrefs?.loadHermesBaseUrl() ?: HermesApi.DEFAULT_BASE_URL)
+    var hermesApiKey by mutableStateOf(backendPrefs?.loadHermesApiKey() ?: "")
+
+    var hermesSessionId by mutableStateOf(backendPrefs?.loadHermesSessionId())
+        private set
+
+    val hermesSessionKey: String
+        get() = backendPrefs?.loadHermesSessionKey() ?: ""
+
+    val hermesSessions = mutableStateListOf<HermesSession>()
+    var hermesSessionsLoading by mutableStateOf(false)
+        private set
+    var hermesSessionsError by mutableStateOf<String?>(null)
+        private set
+
+    /** Live tool activity during a Hermes turn (tool.* events), rendered
+     * as an activity line above the composer -- never as chat content. */
+    var streamingTool by mutableStateOf<ToolActivity?>(null)
+        private set
+
+    /** Amber notice chip in ChatScreen for Hermes-specific situations:
+     * no session picked yet, features the gateway doesn't have, etc. */
+    var hermesNotice by mutableStateOf<String?>(null)
+
+    fun updateHermesBaseUrl(url: String) {
+        hermesBaseUrl = url
+        backendPrefs?.saveHermesBaseUrl(url)
+    }
+
+    fun updateHermesApiKey(key: String) {
+        hermesApiKey = key
+        backendPrefs?.saveHermesApiKey(key)
+    }
+
+    /** Fetches the gateway's session list for the Settings picker. The
+     * session Telegram is using (source "telegram") sorts first -- it's
+     * the natural pick. */
+    fun loadHermesSessions() {
+        coroutineScope.launch {
+            hermesSessionsLoading = true
+            hermesSessionsError = null
+            when (val result = HermesApi.fetchSessions(hermesBaseUrl, hermesApiKey)) {
+                is HermesSessionsResult.Ready -> {
+                    hermesSessions.clear()
+                    hermesSessions.addAll(
+                        result.sessions.sortedWith(
+                            compareByDescending<HermesSession> { it.isTelegram }
+                                .thenByDescending { it.lastActivityAtMs ?: 0L }
+                        )
+                    )
+                    if (result.sessions.isEmpty()) {
+                        hermesSessionsError = "The gateway has no sessions yet -- message Wendy on Telegram first."
+                    }
+                }
+                is HermesSessionsResult.Failed -> {
+                    hermesSessionsError = result.message?.takeIf { it.isNotBlank() }
+                        ?: "Couldn't reach the Hermes gateway."
+                }
+            }
+            hermesSessionsLoading = false
+        }
+    }
+
+    /** Picks the ONE shared session the app chats inside -- the same
+     * session Telegram uses. The transcript reloads from it immediately
+     * so the chat screen shows the shared history. */
+    fun selectHermesSession(id: String) {
+        if (id.isBlank() || id == hermesSessionId) return
+        hermesSessionId = id
+        backendPrefs?.saveHermesSessionId(id)
+        hermesNotice = null
+        isHistoryLoading = true
+        coroutineScope.launch { loadHermesHistory() }
+    }
+
 
     /** A file picked in the composer, waiting to ride on the next sent
      * message. Cleared once sendMessage() consumes it (success or
@@ -266,6 +442,13 @@ class FestoAppState(
      * without the server call, the next history fetch would resurrect
      * everything that was cleared locally. */
     fun startFreshConversation(initialPrompt: String? = null) {
+        // Hermes mode shares ONE session with Telegram by design; there
+        // is no per-surface reset to call. Explain instead of silently
+        // doing nothing (or worse, hitting the Gen 1 server).
+        if (_backendMode == BackendMode.HERMES) {
+            hermesNotice = "Hermes mode shares one continuous session with Telegram -- there's no separate fresh chat."
+            return
+        }
         coroutineScope.launch {
             sessionResetError = null
             val ok = WendyApi.resetSession()
@@ -291,6 +474,13 @@ class FestoAppState(
      * server to be the only backstop). Sets attachmentError on rejection
      * instead of silently dropping the pick. */
     fun setPendingAttachment(filename: String, bytes: ByteArray) {
+        // The Hermes gateway contract has no attachment field -- refuse at
+        // pick time with the honest reason rather than accepting a file
+        // that could never be sent.
+        if (_backendMode == BackendMode.HERMES) {
+            attachmentError = "Attachments aren't wired to the Hermes gateway yet."
+            return
+        }
         val maxRawBytes = 12 * 1024 * 1024
         if (bytes.size > maxRawBytes) {
             attachmentError = "\"$filename\" is too large (${bytes.size / (1024 * 1024)}MB, limit 12MB)."
@@ -318,6 +508,38 @@ class FestoAppState(
         // an attachment alone (no caption) is a real, valid send, matching
         // how Telegram already treats a bare photo/document upload.
         if ((text.isBlank() && attachment == null) || isStreamingResponse) return
+
+        // Hermes mode has its own send path: no attachment field in the
+        // gateway contract, and a shared session must be picked first.
+        if (_backendMode == BackendMode.HERMES) {
+            if (attachment != null) {
+                // Refuse honestly instead of silently dropping the file:
+                // keep the attachment pending so the user can switch back
+                // to Gen 1 and send it, or clear it.
+                attachmentError = "Attachments aren't wired to the Hermes gateway yet -- clear the file or switch back to Gen 1."
+                return
+            }
+            val sessionId = hermesSessionId
+            if (sessionId == null) {
+                hermesNotice = "Pick a Wendy session in Settings first -- the app and Telegram share one conversation."
+                return
+            }
+            pendingAttachment = null
+            val hermesMessages = messagesMap.getOrPut(MAIN_CONVERSATION_ID) { mutableStateListOf() }
+            hermesMessages.add(
+                Message(
+                    id = "msg-${UUID.randomUUID().toString().take(8)}",
+                    conversationId = MAIN_CONVERSATION_ID,
+                    role = Role.USER,
+                    content = text.trim(),
+                    modality = Modality.TEXT,
+                    timestamp = System.currentTimeMillis()
+                )
+            )
+            streamAssistantResponseHermes(MAIN_CONVERSATION_ID, sessionId, text.trim())
+            return
+        }
+
         pendingAttachment = null
 
         var targetConvId = activeConversationId
@@ -448,6 +670,114 @@ class FestoAppState(
         }
     }
 
+    /** Hermes turn: streams POST /api/sessions/{id}/chat/stream into the
+     * same placeholder-bubble plumbing the Gen 1 path uses. Differences
+     * from the legacy path: tool.* events surface as an activity line
+     * (streamingTool), run.completed's session_id is authoritative and
+     * gets persisted (compression may rotate it), and the gateway picks
+     * the model -- there's no model parameter to forward. */
+    private fun streamAssistantResponseHermes(convId: String, sessionId: String, userPrompt: String) {
+        streamingJob?.cancel()
+        isStreamingResponse = true
+
+        val assistantMsgId = "msg-${UUID.randomUUID().toString().take(8)}"
+        val convMessages = messagesMap[convId] ?: return
+        val placeholderMsg = Message(
+            id = assistantMsgId,
+            conversationId = convId,
+            role = Role.ASSISTANT,
+            content = "",
+            modality = Modality.TEXT,
+            model = "hermes",
+            isStreaming = true,
+            timestamp = System.currentTimeMillis()
+        )
+        convMessages.add(placeholderMsg)
+
+        val sessionKey = hermesSessionKey
+        streamingJob = coroutineScope.launch {
+            var fullResponse = ""
+            var errorMessage: String? = null
+            var finalUsage: ServerUsage? = null
+            val startedAt = System.currentTimeMillis()
+
+            HermesApi.streamChat(
+                baseUrl = hermesBaseUrl,
+                apiKey = hermesApiKey,
+                sessionId = sessionId,
+                message = userPrompt,
+                sessionKey = sessionKey
+            ).collect { event ->
+                when (event) {
+                    is HermesEvent.Delta -> {
+                        streamingTool = null // assistant is talking; tool activity is over
+                        fullResponse = event.textSoFar
+                        val msgIndex = convMessages.indexOfFirst { it.id == assistantMsgId }
+                        if (msgIndex != -1) {
+                            convMessages[msgIndex] = convMessages[msgIndex].copy(
+                                content = fullResponse,
+                                isStreaming = true
+                            )
+                        }
+                    }
+                    is HermesEvent.ToolActivity -> {
+                        streamingTool = ToolActivity(toolName = event.toolName, detail = event.detail)
+                    }
+                    is HermesEvent.Completed -> {
+                        if (event.text.isNotBlank()) fullResponse = event.text
+                        finalUsage = event.usage
+                    }
+                    is HermesEvent.SessionRotated -> {
+                        // run.completed's session_id is authoritative --
+                        // persist it so the next turn and the transcript
+                        // follow the rotated session.
+                        hermesSessionId = event.sessionId
+                        backendPrefs?.saveHermesSessionId(event.sessionId)
+                    }
+                    is HermesEvent.Error -> errorMessage = event.message
+                }
+            }
+
+            streamingTool = null
+
+            if (errorMessage != null && fullResponse.isBlank()) {
+                fullResponse = "Couldn't reach Wendy: $errorMessage"
+            }
+
+            val msgIndex = convMessages.indexOfFirst { it.id == assistantMsgId }
+            if (msgIndex != -1) {
+                convMessages[msgIndex] = convMessages[msgIndex].copy(
+                    content = fullResponse,
+                    isStreaming = false,
+                    model = finalUsage?.modelId ?: "hermes",
+                    inputTokens = finalUsage?.promptTokens,
+                    outputTokens = finalUsage?.completionTokens,
+                    costUsd = finalUsage?.costUsd
+                )
+            }
+
+            // Only a real server-reported usage lands in the ledger --
+            // never an estimate (same rule as the Gen 1 path).
+            if (errorMessage == null && finalUsage != null) {
+                usageEvents.add(
+                    0,
+                    UsageEvent(
+                        id = System.currentTimeMillis(),
+                        model = finalUsage?.modelId ?: "hermes",
+                        kind = "chat",
+                        inputTokens = finalUsage?.promptTokens ?: 0,
+                        outputTokens = finalUsage?.completionTokens ?: 0,
+                        costUsd = finalUsage?.costUsd ?: 0.0,
+                        durationMs = (System.currentTimeMillis() - startedAt).toInt(),
+                        timestamp = System.currentTimeMillis()
+                    )
+                )
+            }
+
+            isStreamingResponse = false
+        }
+    }
+
     private fun maybeDistillMemory(userPrompt: String, assistantReply: String, convTitle: String?) {
         val lower = userPrompt.lowercase()
         if (lower.contains("i prefer") || lower.contains("i always") || lower.contains("my project") || lower.contains("remember")) {
@@ -475,6 +805,13 @@ class FestoAppState(
     // app); the chat call reuses the existing streamAssistantResponse path.
     fun startVoiceRecording() {
         if (voiceState != VoiceState.IDLE) return
+        // Voice is a Gen 1 pipeline (STT/TTS are proxied through Wendy's
+        // own server); the Hermes gateway has no audio endpoints, so the
+        // overlay would be a dead end in HERMES mode.
+        if (_backendMode == BackendMode.HERMES) {
+            voiceLiveTranscript = "Voice isn't wired to the Hermes gateway yet -- type instead."
+            return
+        }
         val engine = audioEngine ?: return
         if (!micPermissionGranted) {
             // The UI should have requested RECORD_AUDIO before opening the
@@ -731,10 +1068,14 @@ class FestoAppState(
 @Composable
 fun rememberFestoAppState(
     coroutineScope: CoroutineScope = rememberCoroutineScope(),
-    initialThemeMode: ThemeMode = ThemeMode.SYSTEM
+    initialThemeMode: ThemeMode = ThemeMode.SYSTEM,
+    initialBackendMode: BackendMode = BackendMode.GEN1
 ): FestoAppState {
     val context = androidx.compose.ui.platform.LocalContext.current.applicationContext
     val audioEngine = remember(context) { VoiceAudioEngine(context) }
     val themePrefs = remember(context) { ThemePreferences(context) }
-    return remember { FestoAppState(coroutineScope, audioEngine, themePrefs, initialThemeMode) }
+    val backendPrefs = remember(context) { BackendPreferences(context) }
+    return remember {
+        FestoAppState(coroutineScope, audioEngine, themePrefs, initialThemeMode, backendPrefs, initialBackendMode)
+    }
 }
