@@ -86,6 +86,16 @@ class HermesVoiceConversation(
         private const val SPOKEN_CHAR_CAP = 800
 
         private const val UTTERANCE_ID = "hermes_voice_conversation_reply"
+
+        /** Utterance-id prefix for STREAMED sentence chunks queued while
+         * the reply is still generating. Only the final-tail utterance
+         * carries [UTTERANCE_ID], so re-arming keeps keying on the real
+         * end of the reply. */
+        private const val PROGRESS_UTT_PREFIX = "hermes_voice_progress_"
+
+        /** Smallest streamed chunk worth queueing (skips lone list
+         * markers / stray punctuation). */
+        private const val MIN_SPOKEN_CHUNK = 3
     }
 
     // Application context: the recognizer and the TTS engine outlive any
@@ -134,6 +144,12 @@ class HermesVoiceConversation(
     private var ttsInitFailed = false
     private var ttsFailureAnnounced = false
 
+    /** Streaming TTS: the plainified reply prefix already queued for
+     * speaking this turn (complete sentences only). Progress events queue
+     * everything beyond it; the final reply speaks the remaining tail.
+     * Reset when the turn settles and on stop. */
+    private var spokenSoFar = ""
+
     private val sendRunnable = Runnable { sendIfTimerFired() }
     private val rearmRunnable = Runnable {
         if (active && phase == Phase.LISTENING && !sendTimerPending) {
@@ -144,6 +160,13 @@ class HermesVoiceConversation(
         if (active && phase == Phase.THINKING) {
             // The turn settled without the completion hook (cancelled
             // stream, no-op send, backend switch) -- recover the loop.
+            // Streamed sentence chunks may still be queued: they must not
+            // speak into the freshly armed mic.
+            try {
+                tts?.stop()
+            } catch (_: Exception) {
+            }
+            spokenSoFar = ""
             beginListenCycle(resetPartial = true)
         }
     }
@@ -212,6 +235,8 @@ class HermesVoiceConversation(
         ttsInitFailed = false
         ttsFailureAnnounced = false
         ensureTts()
+        spokenSoFar = ""
+        appState.onHermesTurnProgress = { cumulative -> onTurnProgress(cumulative) }
         appState.onHermesTurnCompleted = { finalText -> onTurnFinal(finalText) }
         phase = Phase.LISTENING
         beginListenCycle(resetPartial = true)
@@ -227,6 +252,7 @@ class HermesVoiceConversation(
         mainHandler.removeCallbacks(turnWatchdogRunnable)
         recognizer.destroy()
         appState.onHermesTurnCompleted = null
+        appState.onHermesTurnProgress = null
         try {
             tts?.stop()
         } catch (_: Exception) {
@@ -238,6 +264,7 @@ class HermesVoiceConversation(
         tts = null
         ttsReady = false
         muted = false
+        spokenSoFar = ""
         accumulated = ""
         sendAttempts = 0
         sendTimerPending = false
@@ -253,15 +280,17 @@ class HermesVoiceConversation(
     fun setMuted(value: Boolean) {
         if (muted == value) return
         muted = value
-        if (value && phase == Phase.SPEAKING) {
-            // Cut the current utterance now. TextToSpeech.stop() may end
-            // it with an error callback rather than onDone (engine-
-            // dependent), so resume listening here instead of waiting.
+        if (value) {
+            // Streamed sentence chunks can be queued even while the turn is
+            // still THINKING -- cut them immediately, whatever the phase.
             try {
                 tts?.stop()
             } catch (_: Exception) {
             }
             if (active && phase == Phase.SPEAKING) {
+                // Cut the current utterance now. TextToSpeech.stop() may end
+                // it with an error callback rather than onDone (engine-
+                // dependent), so resume listening here instead of waiting.
                 beginListenCycle(resetPartial = true)
             }
         }
@@ -390,6 +419,7 @@ class HermesVoiceConversation(
         }
         accumulated = ""
         livePartial = ""
+        spokenSoFar = "" // a new voice-sent turn streams its own sentences
         recognizer.destroy()
         phase = Phase.THINKING
         mainHandler.removeCallbacks(turnWatchdogRunnable)
@@ -433,19 +463,99 @@ class HermesVoiceConversation(
         }
     }
 
+    /** Fired by [FestoAppState.onHermesTurnProgress] while the loop's own
+     * reply streams in: queue each newly COMPLETED sentence so speech
+     * starts with the first sentence instead of waiting for the whole
+     * reply. Deliberately conservative -- any uncertainty (muted, engine
+     * not ready, an unclosed code fence, plainified-text reflow, a phase
+     * other than THINKING) just skips the chunk, and the final reply then
+     * speaks the remainder. THINKING-only: while LISTENING the mic is hot
+     * (a manual typed turn streams then), and speaking into it would feed
+     * the recognizer its own audio; while SPEAKING the queue already holds
+     * the previous reply. */
+    private fun onTurnProgress(cumulative: String) {
+        if (!active || muted || !ttsReady) return
+        if (phase != Phase.THINKING) return
+        if (fenceMarkerRegex.findAll(cumulative).count() % 2 == 1) {
+            // An unclosed code fence: hold speech until it closes -- the
+            // final reply speaks the fence-stripped remainder.
+            return
+        }
+        val spoken = spokenText(cumulative)
+        if (spoken.isBlank()) return
+        if (!spoken.startsWith(spokenSoFar)) {
+            // The plainified text reflowed mid-stream (a link/URL or bold
+            // run just completed): wait for the authoritative final text.
+            return
+        }
+        if (spoken.length <= spokenSoFar.length) return
+        val searchFrom = spokenSoFar.length
+        var seam = -1
+        for (i in spoken.length - 1 downTo searchFrom) {
+            val c = spoken[i]
+            if (c == '.' || c == '!' || c == '?' || c == '…' || c == '\n') {
+                seam = i + 1
+                break
+            }
+        }
+        if (seam <= searchFrom) return // no complete sentence yet
+        val chunk = spoken.substring(searchFrom, seam).trim()
+        // Advance the cursor past the seam either way so a skipped
+        // fragment (lone "1.", stray punctuation) isn't rescanned forever.
+        spokenSoFar = spoken.substring(0, seam)
+        if (chunk.length < MIN_SPOKEN_CHUNK) return
+        val queued = try {
+            // QUEUE_ADD: chunks join the queue in order; the final tail
+            // carries UTTERANCE_ID, so its onDone still re-arms the loop
+            // after every chunk has finished.
+            tts?.speak(
+                chunk, TextToSpeech.QUEUE_ADD, null,
+                PROGRESS_UTT_PREFIX + System.nanoTime()
+            )
+        } catch (_: Exception) {
+            TextToSpeech.ERROR
+        }
+        if (queued != TextToSpeech.SUCCESS) {
+            // Engine refused the chunk: forget the streamed prefix so the
+            // final reply speaks (and flush-replaces) everything cleanly.
+            spokenSoFar = ""
+        }
+    }
+
     private fun speakReply(finalText: String) {
         val spoken = spokenText(finalText)
-        if (muted || !ttsReady || spoken.isBlank()) {
+        val streamed = spokenSoFar
+        spokenSoFar = "" // the turn settled -- the next reply starts fresh
+        val reflowed = streamed.isNotEmpty() && !spoken.startsWith(streamed)
+        val streamedOk = streamed.isNotEmpty() && !reflowed
+        val tail = if (streamedOk) spoken.substring(streamed.length).trim() else spoken
+        if (muted || !ttsReady || (streamedOk && tail.isBlank()) ||
+            (!streamedOk && spoken.isBlank())
+        ) {
             // Muted / engine not ready / nothing speakable (e.g. a pure
-            // code-block reply): back to listening without a dead pause.
+            // code-block reply): drop any queued streamed chunks and go
+            // back to listening without a dead pause.
+            try {
+                tts?.stop()
+            } catch (_: Exception) {
+            }
             beginListenCycle(resetPartial = true)
             return
         }
         phase = Phase.SPEAKING
         livePartial = ""
         val queued = try {
-            // QUEUE_FLUSH: a new reply always replaces whatever is queued.
-            tts?.speak(spoken, TextToSpeech.QUEUE_FLUSH, null, UTTERANCE_ID)
+            if (streamedOk) {
+                // The streamed prefix is already queued and/or spoken --
+                // only the remaining tail is new. QUEUE_ADD keeps the
+                // sentence order; this utterance's onDone (it carries
+                // UTTERANCE_ID and sits last in the queue) re-arms the loop.
+                tts?.speak(tail, TextToSpeech.QUEUE_ADD, null, UTTERANCE_ID)
+            } else {
+                // No usable stream arrived (or it reflowed): speak the
+                // whole reply at once, replacing anything queued.
+                tts?.speak(spoken, TextToSpeech.QUEUE_FLUSH, null, UTTERANCE_ID)
+            }
         } catch (_: Exception) {
             TextToSpeech.ERROR
         }
@@ -512,6 +622,10 @@ class HermesVoiceConversation(
      * (an unterminated fence runs to end of input), same rule the
      * renderer's fence parser uses while deltas arrive. */
     private val codeFenceRegex = Regex("```[a-zA-Z0-9_-]*\\s*\\n?[\\s\\S]*?(?:```|\\z)")
+
+    /** Bare fence markers, for the streaming hold: an odd count means a
+     * code block is still open -- hold sentence speech until it closes. */
+    private val fenceMarkerRegex = Regex("```")
 
     /** `[text](url)` -- links keep their visible text; the URL is not
      * spoken. (Images are already gone by this point via the renderer's

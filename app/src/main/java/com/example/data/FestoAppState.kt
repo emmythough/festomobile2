@@ -266,8 +266,9 @@ class FestoAppState(
         isStreamingResponse = false
         // The voice-conversation loop is Hermes-only; the ChatScreen
         // effect stops the controller itself on a mode switch -- this
-        // only guarantees the turn hook can't fire cross-backend.
+        // only guarantees the turn hooks can't fire cross-backend.
         onHermesTurnCompleted = null
+        onHermesTurnProgress = null
         _backendMode = mode
         backendPrefs?.saveMode(mode)
         messagesMap[MAIN_CONVERSATION_ID]?.clear()
@@ -315,6 +316,14 @@ class FestoAppState(
      * setBackendMode() clears it too so a stale hook can never fire on
      * the other backend. */
     var onHermesTurnCompleted: ((String) -> Unit)? = null
+
+    /** Streaming companion to [onHermesTurnCompleted]: invoked on every
+     * assistant.delta with the CUMULATIVE reply text so far, while the
+     * turn is still streaming. The voice loop uses it to speak completed
+     * sentences as they arrive instead of waiting for the whole reply.
+     * Null on the normal path -- zero overhead. Cleared by the loop on
+     * stop and by setBackendMode() like the completion hook. */
+    var onHermesTurnProgress: ((String) -> Unit)? = null
 
     fun updateHermesBaseUrl(url: String) {
         hermesBaseUrl = url
@@ -871,6 +880,7 @@ class FestoAppState(
                     is HermesEvent.Delta -> {
                         streamingTool = null // assistant is talking; tool activity is over
                         fullResponse = event.textSoFar
+                        onHermesTurnProgress?.invoke(fullResponse)
                         val msgIndex = convMessages.indexOfFirst { it.id == assistantMsgId }
                         if (msgIndex != -1) {
                             convMessages[msgIndex] = convMessages[msgIndex].copy(
