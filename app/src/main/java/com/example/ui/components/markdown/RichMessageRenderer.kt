@@ -26,15 +26,18 @@ sealed class MessageBlock {
 }
 
 /** `![alt](src)` -- src must be space/paren-free, which both data URLs
- * (base64 + "data:image/...;base64,") and http(s) URLs satisfy. */
-private val markdownImageRegex = Regex("!\\[([^\\]]*)\\]\\(([^)\\s]+)\\)")
+ * (base64 + "data:image/...;base64,") and http(s) URLs satisfy.
+ * internal (not private) so the Hermes voice-conversation loop's TTS
+ * stripper removes exactly the same image tokens the renderer shows. */
+internal val markdownImageRegex = Regex("!\\[([^\\]]*)\\]\\(([^)\\s]+)\\)")
 
 /** A path-like token ending in an audio extension -- how the gateway
  * surfaces generated audio files in reply text. Deliberately conservative:
  * not preceded by "(", a word char, "@" or "." (so markdown links,
  * sentence words and email-ish strings don't half-match) and not followed
- * by a word char or "." (so "song.mp3." keeps its sentence period). */
-private val audioPathRegex = Regex(
+ * by a word char or "." (so "song.mp3." keeps its sentence period).
+ * internal (not private) for the same TTS-stripper reuse as above. */
+internal val audioPathRegex = Regex(
     "(?<![\\w@(.])[\\w./\\\\-]+\\.(?:mp3|m4a|m4b|wav|ogg|oga|flac|aac|opus|wma)(?![\\w.])",
     RegexOption.IGNORE_CASE
 )

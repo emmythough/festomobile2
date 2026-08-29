@@ -2,7 +2,11 @@ package com.example.ui.chat
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -44,10 +48,13 @@ import androidx.compose.material.icons.rounded.Build
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.GraphicEq
+import androidx.compose.material.icons.rounded.Headset
 import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.Speed
+import androidx.compose.material.icons.rounded.VolumeOff
+import androidx.compose.material.icons.rounded.VolumeUp
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -69,6 +76,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
@@ -94,6 +102,9 @@ import android.net.Uri
 import android.util.Base64
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.foundation.Image
 import androidx.compose.ui.platform.LocalContext
 import com.example.data.BackendMode
@@ -104,6 +115,7 @@ import com.example.ui.components.ModelBadgeChip
 import com.example.ui.components.NovaAvatar
 import com.example.ui.theme.FestoTheme
 import com.example.ui.voice.HermesDictation
+import com.example.ui.voice.HermesVoiceConversation
 
 @Composable
 fun ChatScreen(
@@ -175,11 +187,53 @@ fun ChatScreen(
         dictationError = null
     }
 
+    // ---- HERMES voice conversation (hands-free loop) ----
+    // Speak -> auto-send on ~1.5s of silence -> reply streams -> spoken
+    // aloud -> listen again. Runs ONLY while toggled on (headset button in
+    // the top bar, HERMES mode only) -- nothing auto-starts on app open,
+    // and the manual dictation mic above keeps working exactly as before.
+    // The controller reuses the dictation recognizer pattern and the
+    // composer's send path (FestoAppState.sendMessage); no HTTP and no
+    // recognition plumbing is duplicated here.
+    val voiceConversation = remember(context) {
+        HermesVoiceConversation(context = context, appState = appState)
+    }
+    DisposableEffect(voiceConversation) {
+        onDispose { voiceConversation.stop() }
+    }
+
+    // Leaving the screen (dispose) or backgrounding (ON_PAUSE) must tear
+    // the loop down: recognizer destroyed, TTS flushed and shut down.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, voiceConversation) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_PAUSE) {
+                voiceConversation.stop()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    var pendingMicActionIsConversation by remember { mutableStateOf(false) }
+
+    // Start the hands-free loop (permission already checked by callers).
+    // Manual dictation and the loop share the one recognizer slot, so an
+    // in-flight dictation is cancelled first.
+    fun startVoiceConversation() {
+        if (isDictating || dictationError != null) cancelDictation()
+        voiceConversation.start()
+    }
+
     // A backend switch mid-dictation leaves an in-flight recognizer whose
-    // transcript would land after the switch -- discard it instead.
+    // transcript would land after the switch -- discard it instead. The
+    // voice-conversation loop is Hermes-only and stops with it too.
     LaunchedEffect(appState.backendMode) {
-        if (appState.backendMode != BackendMode.HERMES && (isDictating || dictationError != null)) {
-            cancelDictation()
+        if (appState.backendMode != BackendMode.HERMES) {
+            if (isDictating || dictationError != null) {
+                cancelDictation()
+            }
+            voiceConversation.stop()
         }
     }
 
@@ -191,20 +245,31 @@ fun ChatScreen(
     ) { granted ->
         appState.onMicPermissionResult(granted)
         val wantsDictation = pendingMicActionIsDictation
+        val wantsConversation = pendingMicActionIsConversation
         pendingMicActionIsDictation = false
+        pendingMicActionIsConversation = false
         if (granted) {
-            if (wantsDictation) {
-                startDictation()
-            } else {
-                appState.isVoiceOverlayOpen = true
-                appState.startVoiceRecording()
+            when {
+                wantsConversation -> startVoiceConversation()
+                wantsDictation -> startDictation()
+                else -> {
+                    appState.isVoiceOverlayOpen = true
+                    appState.startVoiceRecording()
+                }
             }
         } else {
-            if (wantsDictation) {
-                dictationError = "Microphone permission denied -- enable it in Settings to dictate."
-            } else {
-                appState.isVoiceOverlayOpen = true
-                appState.voiceLiveTranscript = "Microphone permission denied. Enable it in Settings to use voice."
+            when {
+                wantsConversation -> {
+                    voiceConversation.voiceNotice =
+                        "Microphone permission denied -- enable it in Settings for hands-free voice."
+                }
+                wantsDictation -> {
+                    dictationError = "Microphone permission denied -- enable it in Settings to dictate."
+                }
+                else -> {
+                    appState.isVoiceOverlayOpen = true
+                    appState.voiceLiveTranscript = "Microphone permission denied. Enable it in Settings to use voice."
+                }
             }
         }
     }
@@ -216,6 +281,10 @@ fun ChatScreen(
         appState.onMicPermissionResult(granted)
         if (granted) {
             if (isHermes) {
+                // The hands-free loop holds the recognizer while it runs;
+                // taking over with manual dictation stops the loop first
+                // (two SpeechRecognizers would fight over the mic).
+                if (voiceConversation.isActive) voiceConversation.stop()
                 if (isDictating) stopDictation() else startDictation()
             } else {
                 appState.isVoiceOverlayOpen = true
@@ -223,6 +292,27 @@ fun ChatScreen(
             }
         } else {
             pendingMicActionIsDictation = isHermes
+            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    // Hands-free headset toggle: starts the loop (routing through the
+    // RECORD_AUDIO permission flow on first use) or stops it. Distinct
+    // from the dictation mic -- this one speaks the replies back.
+    val toggleVoiceConversation: () -> Unit = {
+        val granted = ContextCompat.checkSelfPermission(
+            context, Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+        appState.onMicPermissionResult(granted)
+        if (granted) {
+            if (voiceConversation.isActive) {
+                voiceConversation.stop()
+            } else {
+                startVoiceConversation()
+            }
+        } else {
+            pendingMicActionIsDictation = false
+            pendingMicActionIsConversation = true
             permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
@@ -252,7 +342,9 @@ fun ChatScreen(
                 onOpenDrawer = { appState.isDrawerOpen = true },
                 onOpenModelPicker = { appState.isModelSheetOpen = true },
                 onOpenVoice = openVoice,
-                onNewChat = { appState.startFreshConversation() }
+                onNewChat = { appState.startFreshConversation() },
+                conversationActive = voiceConversation.isActive,
+                onToggleVoiceConversation = toggleVoiceConversation
             )
 
             // Divider Hairline
@@ -393,6 +485,25 @@ fun ChatScreen(
                 )
             }
 
+            // HERMES voice-conversation loop status -- what the loop is
+            // doing right now (listening… / thinking… / speaking…), the
+            // mute switch for private situations, and a Stop affordance.
+            // Notices (TTS unavailable, dropped send) use the same amber
+            // chip pattern as the dictation/attachment errors.
+            if (appState.backendMode == BackendMode.HERMES &&
+                (voiceConversation.isActive || voiceConversation.voiceNotice != null)
+            ) {
+                VoiceConversationChip(
+                    phase = voiceConversation.phase,
+                    partial = voiceConversation.livePartial,
+                    muted = voiceConversation.muted,
+                    notice = voiceConversation.voiceNotice,
+                    onToggleMute = { voiceConversation.setMuted(!voiceConversation.muted) },
+                    onStop = { voiceConversation.stop() },
+                    onDismissNotice = { voiceConversation.voiceNotice = null }
+                )
+            }
+
             // Bottom Composer Input Bar
             ChatComposer(
                 inputText = inputText,
@@ -434,7 +545,9 @@ private fun ChatTopBar(
     onOpenDrawer: () -> Unit,
     onOpenModelPicker: () -> Unit,
     onOpenVoice: () -> Unit,
-    onNewChat: () -> Unit
+    onNewChat: () -> Unit,
+    conversationActive: Boolean,
+    onToggleVoiceConversation: () -> Unit
 ) {
     val extendedColors = FestoTheme.colors
 
@@ -478,6 +591,50 @@ private fun ChatTopBar(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
+            // Hands-free voice conversation toggle -- HERMES only, distinct
+            // from the dictation mic: pulsing while the loop runs, tap
+            // again to stop it. Gen 1 never sees it.
+            if (appState.backendMode == BackendMode.HERMES) {
+                val pulse = if (conversationActive) {
+                    val transition = rememberInfiniteTransition(label = "voiceConversationPulse")
+                    val pulseAlpha by transition.animateFloat(
+                        initialValue = 1f,
+                        targetValue = 0.45f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(650),
+                            repeatMode = RepeatMode.Reverse
+                        ),
+                        label = "voiceConversationPulseAlpha"
+                    )
+                    pulseAlpha
+                } else {
+                    1f
+                }
+                IconButton(
+                    onClick = onToggleVoiceConversation,
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (conversationActive) extendedColors.brandNova
+                            else extendedColors.brandNovaSoft
+                        )
+                        .alpha(pulse)
+                        .testTag("hermes_voice_conversation_toggle")
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Headset,
+                        contentDescription = if (conversationActive) {
+                            "Stop voice conversation"
+                        } else {
+                            "Start voice conversation"
+                        },
+                        tint = if (conversationActive) Color.White else extendedColors.brandNova,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+
             // Voice Shortcut Button
             IconButton(
                 onClick = onOpenVoice,
@@ -1005,6 +1162,102 @@ private fun DictationStatusChip(
         ) {
             Text(
                 text = error,
+                style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.sp),
+                color = extendedColors.accentAmber
+            )
+        }
+    }
+}
+
+/** Live status line for the HERMES voice-conversation loop: what the loop
+ * is doing right now (listening… / thinking… / speaking…, with the live
+ * partial transcript while listening), a speaker mute switch for private
+ * situations, and a Stop affordance (the top-bar headset toggle stops it
+ * too). Notices render as the same dismissible amber chip pattern the
+ * dictation and attachment errors use -- shown independently of the status
+ * row so a mid-loop notice (TTS unavailable, dropped send) is still seen. */
+@Composable
+private fun VoiceConversationChip(
+    phase: HermesVoiceConversation.Phase,
+    partial: String,
+    muted: Boolean,
+    notice: String?,
+    onToggleMute: () -> Unit,
+    onStop: () -> Unit,
+    onDismissNotice: () -> Unit
+) {
+    val extendedColors = FestoTheme.colors
+    if (phase != HermesVoiceConversation.Phase.IDLE) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp)
+                .padding(bottom = 4.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(extendedColors.brandNovaSoft)
+                .border(1.dp, extendedColors.brandNovaLine, RoundedCornerShape(14.dp))
+                .padding(horizontal = 10.dp, vertical = 6.dp)
+                .testTag("hermes_voice_conversation_status"),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Headset,
+                contentDescription = null,
+                tint = extendedColors.brandNova,
+                modifier = Modifier.size(14.dp)
+            )
+            val statusText = when (phase) {
+                HermesVoiceConversation.Phase.LISTENING ->
+                    if (partial.isBlank()) "Listening…" else partial
+                HermesVoiceConversation.Phase.THINKING -> "Thinking…"
+                HermesVoiceConversation.Phase.SPEAKING -> "Speaking…"
+                HermesVoiceConversation.Phase.IDLE -> ""
+            }
+            Text(
+                text = statusText,
+                style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.sp),
+                color = extendedColors.inkTertiary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            Icon(
+                imageVector = if (muted) Icons.Rounded.VolumeOff else Icons.Rounded.VolumeUp,
+                contentDescription = if (muted) "Unmute voice replies" else "Mute voice replies",
+                tint = extendedColors.brandNova,
+                modifier = Modifier
+                    .size(16.dp)
+                    .clickable(onClick = onToggleMute)
+                    .testTag("hermes_voice_conversation_mute")
+            )
+            Text(
+                text = "Stop",
+                style = MaterialTheme.typography.labelMedium.copy(
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold
+                ),
+                color = extendedColors.brandNova,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(onClick = onStop)
+                    .padding(horizontal = 4.dp, vertical = 2.dp)
+            )
+        }
+    }
+    if (notice != null) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp)
+                .padding(bottom = 4.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(extendedColors.accentAmberSoft)
+                .clickable(onClick = onDismissNotice)
+                .padding(horizontal = 10.dp, vertical = 6.dp)
+        ) {
+            Text(
+                text = notice,
                 style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.sp),
                 color = extendedColors.accentAmber
             )

@@ -36,6 +36,13 @@ class HermesDictation(
     private val onPartial: (String) -> Unit,
     private val onFinal: (String) -> Unit,
     private val onError: (String) -> Unit,
+    /** Hands-free alternative to [onError] for the two outcomes that mean
+     * "nothing was said" rather than a failure: a listen cycle ending with
+     * empty results, and ERROR_NO_MATCH / ERROR_SPEECH_TIMEOUT. The voice
+     * conversation loop uses it to re-arm quietly instead of raising the
+     * dictation error chip; dictation itself leaves it null and keeps the
+     * existing behavior byte-for-byte. */
+    private val onNoSpeech: (() -> Unit)? = null,
 ) {
     private var recognizer: SpeechRecognizer? = null
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -70,7 +77,11 @@ class HermesDictation(
 
             override fun onError(error: Int) {
                 releaseAfterCallback(rec)
-                onError(describeError(error))
+                if (onNoSpeech != null && isNoSpeechError(error)) {
+                    onNoSpeech()
+                } else {
+                    onError(describeError(error))
+                }
             }
 
             override fun onResults(results: Bundle?) {
@@ -80,10 +91,10 @@ class HermesDictation(
                     ?.firstOrNull()
                     .orEmpty()
                     .trim()
-                if (text.isEmpty()) {
-                    onError("Didn't catch that -- tap the mic and try again.")
-                } else {
-                    onFinal(text)
+                when {
+                    text.isNotEmpty() -> onFinal(text)
+                    onNoSpeech != null -> onNoSpeech()
+                    else -> onError("Didn't catch that -- tap the mic and try again.")
                 }
             }
 
@@ -142,6 +153,12 @@ class HermesDictation(
             }
         }
     }
+
+    /** The two recognizer outcomes that carry no speech at all -- used to
+     * route to [onNoSpeech] when the hands-free loop is driving. */
+    private fun isNoSpeechError(error: Int): Boolean =
+        error == SpeechRecognizer.ERROR_NO_MATCH ||
+            error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
 
     private fun describeError(error: Int): String = when (error) {
         SpeechRecognizer.ERROR_NO_MATCH,

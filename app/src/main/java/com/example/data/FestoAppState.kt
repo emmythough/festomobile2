@@ -264,6 +264,10 @@ class FestoAppState(
         isMemoryBrowserOpen = false
         closeMemoryTranscript()
         isStreamingResponse = false
+        // The voice-conversation loop is Hermes-only; the ChatScreen
+        // effect stops the controller itself on a mode switch -- this
+        // only guarantees the turn hook can't fire cross-backend.
+        onHermesTurnCompleted = null
         _backendMode = mode
         backendPrefs?.saveMode(mode)
         messagesMap[MAIN_CONVERSATION_ID]?.clear()
@@ -303,6 +307,14 @@ class FestoAppState(
     /** Amber notice chip in ChatScreen for Hermes-specific situations:
      * no session picked yet, features the gateway doesn't have, etc. */
     var hermesNotice by mutableStateOf<String?>(null)
+
+    /** Set while the HERMES voice-conversation loop (ChatScreen) is
+     * active: invoked with the final reply text when a Hermes chat turn
+     * settles, so the loop can speak it aloud. Null on the normal path --
+     * zero overhead, no behavior change. The loop clears it on stop, and
+     * setBackendMode() clears it too so a stale hook can never fire on
+     * the other backend. */
+    var onHermesTurnCompleted: ((String) -> Unit)? = null
 
     fun updateHermesBaseUrl(url: String) {
         hermesBaseUrl = url
@@ -922,6 +934,16 @@ class FestoAppState(
             }
 
             isStreamingResponse = false
+
+            // Voice-conversation hook: fired AFTER isStreamingResponse
+            // clears, so the loop's next auto-send can never race an
+            // in-flight turn. fullResponse may be the "Couldn't reach
+            // Wendy..." failure text -- worth hearing in a hands-free
+            // loop too.
+            val turnCompletedHook = onHermesTurnCompleted
+            if (turnCompletedHook != null && fullResponse.isNotBlank()) {
+                turnCompletedHook(fullResponse)
+            }
         }
     }
 
