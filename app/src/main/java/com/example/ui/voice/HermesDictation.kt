@@ -152,10 +152,10 @@ class HermesDictation(
         SpeechRecognizer.ERROR_NETWORK,
         SpeechRecognizer.ERROR_NETWORK_TIMEOUT ->
             "Dictation hit a network problem -- try again."
-        SpeechRecognizer.ERROR_BUSY ->
+        SpeechRecognizer.ERROR_RECOGNIZER_BUSY ->
             "The speech recognizer is busy -- try again in a moment."
-        SpeechRecognizer.ERROR_RECOGNIZER_ACTIVE ->
-            "Dictation is already listening."
+        SpeechRecognizer.ERROR_CLIENT ->
+            "Dictation hit an internal error -- try again."
         else -> "Dictation failed (code $error) -- try again."
     }
 }
