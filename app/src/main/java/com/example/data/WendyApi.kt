@@ -70,6 +70,22 @@ data class ServerUsage(
 /** One turn from GET /api/history -- role is "user" or "assistant". */
 data class HistoryTurn(val role: String, val text: String, val timestamp: Long)
 
+/** One file waiting in Wendy's outbox (GET /api/outbox) -- a one-time
+ * pickup queue: after any surface (this app or Telegram) downloads a
+ * file, it is archived server-side and GONE from the list. `name` is
+ * the exact value to pass back to downloadOutboxFile(). */
+data class OutboxFile(val name: String, val sizeBytes: Long, val createdAtEpochSec: Double)
+
+/** Result of GET /api/outbox/{name}. A sealed result instead of a bare
+ * ByteArray? because a 404 here is an EXPECTED outcome (Telegram or
+ * another surface may have claimed the file first) and the UI must
+ * message it differently from a generic network failure. */
+sealed class OutboxDownload {
+    data class Ready(val bytes: ByteArray) : OutboxDownload()
+    object NotFound : OutboxDownload()
+    data class Failed(val message: String? = null) : OutboxDownload()
+}
+
 /** A file to attach to the next message. Mirrors Telegram's own real,
  * working file path: the server saves it to the shared inbox/ and tells
  * Wendy where it lives as plain text -- her own file tools do the actual
@@ -251,6 +267,58 @@ object WendyApi {
             }
         } catch (_: Exception) {
             emptyList()
+        }
+    }
+
+    /** Fetches the files Wendy has delivered to the outbox -- the same
+     * queue Telegram sees. Empty list on any failure (network error,
+     * bad JSON), same degrade-gracefully convention as fetchModels()
+     * and fetchHistory(); an empty outbox is a normal 200 response,
+     * not an error. */
+    suspend fun fetchOutbox(): List<OutboxFile> = withContext(Dispatchers.IO) {
+        try {
+            client.newCall(authed("$BASE_URL/api/outbox").get().build()).execute().use { response ->
+                if (!response.isSuccessful) return@withContext emptyList()
+                val body = response.body?.string() ?: return@withContext emptyList()
+                val array = JSONObject(body).optJSONArray("files") ?: return@withContext emptyList()
+                (0 until array.length()).mapNotNull { i ->
+                    val entry = array.getJSONObject(i)
+                    val name = entry.optString("name")
+                    if (name.isBlank()) return@mapNotNull null
+                    OutboxFile(
+                        name = name,
+                        sizeBytes = entry.optLong("size"),
+                        // Confirmed live: seconds as a float, NOT millis.
+                        createdAtEpochSec = entry.optDouble("created_at")
+                    )
+                }
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    /** GET /api/outbox/{name} -- streams the raw file bytes. `name` must
+     * be the exact `name` field from fetchOutbox(); it is URL-encoded
+     * here so spaces/odd characters can't produce a bad path. Never
+     * throws: a 404 means another surface (e.g. Telegram) already
+     * claimed the file, an expected race, not an exceptional one. */
+    suspend fun downloadOutboxFile(name: String): OutboxDownload = withContext(Dispatchers.IO) {
+        val encoded = java.net.URLEncoder.encode(name, "UTF-8")
+        try {
+            client.newCall(authed("$BASE_URL/api/outbox/$encoded").get().build())
+                .execute().use { response ->
+                    when {
+                        response.isSuccessful ->
+                            response.body?.bytes()
+                                ?.let { OutboxDownload.Ready(it) }
+                                ?: OutboxDownload.Failed("empty response body")
+                        response.code == 404 -> OutboxDownload.NotFound
+                        else -> OutboxDownload.Failed("HTTP ${response.code}")
+                    }
+                }
+        } catch (e: Exception) {
+            OutboxDownload.Failed(e.message)
         }
     }
 

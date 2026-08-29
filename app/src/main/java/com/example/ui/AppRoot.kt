@@ -29,6 +29,7 @@ import com.example.data.rememberFestoAppState
 import com.example.ui.auth.AuthScreen
 import com.example.ui.chat.ChatScreen
 import com.example.ui.drawer.ConversationDrawer
+import com.example.ui.files.FilesSheet
 import com.example.ui.memory.MemorySheet
 import com.example.ui.models.ModelPickerSheet
 import com.example.ui.settings.SettingsScreen
@@ -115,6 +116,14 @@ fun AppRoot(
                     SettingsScreen(
                         appState = appState,
                         onDismiss = { appState.isSettingsSheetOpen = false }
+                    )
+                }
+
+                // Modal Wendy's Files (outbox) Bottom Sheet
+                if (appState.isFilesSheetOpen) {
+                    FilesSheet(
+                        appState = appState,
+                        onDismiss = { appState.isFilesSheetOpen = false }
                     )
                 }
 

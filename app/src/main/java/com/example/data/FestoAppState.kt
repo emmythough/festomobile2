@@ -148,6 +148,11 @@ class FestoAppState(
     var isMemorySheetOpen by mutableStateOf(false)
     var isUsageSheetOpen by mutableStateOf(false)
     var isSettingsSheetOpen by mutableStateOf(false)
+    var isFilesSheetOpen by mutableStateOf(false)
+
+    /** Outbox badge for the drawer's "Wendy's Files" row -- refreshed
+     * when the drawer opens, not polled. 0 means nothing waiting. */
+    var outboxPendingCount by mutableStateOf(0)
     var isVoiceOverlayOpen by mutableStateOf(false)
 
     // Settings: theme override (System / Light / Dark). The initial value

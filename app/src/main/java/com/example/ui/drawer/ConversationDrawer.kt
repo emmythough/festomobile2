@@ -22,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DataUsage
+import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Logout
 import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.Settings
@@ -34,6 +35,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -44,6 +46,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.FestoAppState
+import com.example.data.WendyApi
 import com.example.ui.components.NovaAvatar
 import com.example.ui.theme.FestoTheme
 
@@ -54,6 +57,13 @@ fun ConversationDrawer(
     modifier: Modifier = Modifier
 ) {
     val extendedColors = FestoTheme.colors
+
+    // No polling loop -- the badge just re-checks once per drawer open.
+    LaunchedEffect(appState.isDrawerOpen) {
+        if (appState.isDrawerOpen) {
+            appState.outboxPendingCount = WendyApi.fetchOutbox().size
+        }
+    }
 
     Surface(
         modifier = modifier
@@ -234,6 +244,62 @@ fun ConversationDrawer(
                         color = extendedColors.accentGreen
                     )
                 )
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            // Wendy's outbox -- a one-time pickup queue, hence the badge
+            // (0 means nothing waiting, so the badge is hidden entirely).
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(extendedColors.surfaceSubtle)
+                    .border(1.dp, extendedColors.borderHairline, RoundedCornerShape(10.dp))
+                    .clickable {
+                        onClose()
+                        appState.isFilesSheetOpen = true
+                    }
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Folder,
+                        contentDescription = null,
+                        tint = extendedColors.accentBlue,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = "Wendy's Files",
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 12.5.sp
+                        ),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+                if (appState.outboxPendingCount > 0) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(extendedColors.brandNovaSoft)
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = "${appState.outboxPendingCount}",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 10.sp,
+                                color = extendedColors.brandNova
+                            )
+                        )
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.height(6.dp))
