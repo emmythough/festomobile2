@@ -35,6 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.FestoAppState
@@ -227,25 +228,65 @@ fun UsageSheet(
                 }
             }
 
-            Spacer(modifier = Modifier.height(18.dp))
-
+            // Honest scoping: these totals cover this session only --
+            // nothing is persisted, so they reset on every app restart.
+            Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "Recent Turn Events",
-                style = MaterialTheme.typography.labelLarge.copy(
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 14.sp
-                ),
-                color = MaterialTheme.colorScheme.onSurface
+                text = "This session only -- resets on restart, not a running total.",
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                color = extendedColors.inkTertiary
             )
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(18.dp))
 
-            // Usage Events List
-            LazyColumn(
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(appState.usageEvents, key = { it.id }) { event ->
-                    UsageEventCard(event = event)
+            if (appState.usageEvents.isEmpty()) {
+                // Same empty-state pattern as MemorySheet: icon + short
+                // title + one-line explanation, centered, instead of a
+                // bare blank area.
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 28.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.DataUsage,
+                        contentDescription = null,
+                        tint = extendedColors.inkTertiary.copy(alpha = 0.5f),
+                        modifier = Modifier.size(32.dp)
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = "No usage yet",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = extendedColors.inkTertiary
+                    )
+                    Text(
+                        text = "Costs and token counts appear here after you send a message.",
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
+                        color = extendedColors.inkTertiary,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            } else {
+                Text(
+                    text = "Recent Turn Events",
+                    style = MaterialTheme.typography.labelLarge.copy(
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp
+                    ),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Usage Events List
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(appState.usageEvents, key = { it.id }) { event ->
+                        UsageEventCard(event = event)
+                    }
                 }
             }
         }

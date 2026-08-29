@@ -528,7 +528,13 @@ class FestoAppState(
 
             // 3) Run through the SAME reply path as text (real Wendy brain).
             voiceState = VoiceState.THINKING
+            // Real wall-clock around the actual model round trip -- the
+            // same measurement the text path logs for its UsageEvent.
+            // STT and TTS are separate calls outside this window and are
+            // deliberately not folded into the number.
+            val replyStartedAt = System.currentTimeMillis()
             val (replyText, serverUsage) = runVoiceReply(convId, recognizedPrompt)
+            val replyDurationMs = (System.currentTimeMillis() - replyStartedAt).toInt()
             if (voiceState != VoiceState.THINKING) return@launch // cancelled
 
             if (replyText == null || replyText.isBlank()) {
@@ -568,7 +574,7 @@ class FestoAppState(
                     inputTokens = serverUsage.promptTokens ?: 0,
                     outputTokens = serverUsage.completionTokens ?: 0,
                     costUsd = serverUsage.costUsd,
-                    durationMs = (replyText.split(" ").size * 180),
+                    durationMs = replyDurationMs,
                     timestamp = System.currentTimeMillis()
                 ))
             }
