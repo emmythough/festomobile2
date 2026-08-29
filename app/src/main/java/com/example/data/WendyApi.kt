@@ -214,6 +214,22 @@ object WendyApi {
         }
     }
 
+    /** POST /api/new -- the real equivalent of Telegram's own /new command
+     * (same reset_session_for() on the server, not a parallel mechanism).
+     * Clears this chat's resumable opencode session; long-term memory is
+     * untouched. Returns true only on a real, confirmed reset -- callers
+     * must not clear local message history on a false return, since that
+     * would show an empty chat while the server-side session is still
+     * live and about to be resurrected by the next history fetch. */
+    suspend fun resetSession(): Boolean = withContext(Dispatchers.IO) {
+        try {
+            client.newCall(authed("$BASE_URL/api/new").post("".toRequestBody(null)).build())
+                .execute().use { it.isSuccessful }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     /** Fetches the real conversation history -- same session Telegram uses.
      * Returns an empty list on any failure (fresh install with no history
      * yet, or a transient network error) rather than throwing, since a

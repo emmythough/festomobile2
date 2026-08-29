@@ -146,7 +146,7 @@ fun ChatScreen(
                 onOpenDrawer = { appState.isDrawerOpen = true },
                 onOpenModelPicker = { appState.isModelSheetOpen = true },
                 onOpenVoice = openVoice,
-                onNewChat = { appState.createNewConversation() }
+                onNewChat = { appState.startFreshConversation() }
             )
 
             // Divider Hairline
@@ -156,6 +156,27 @@ fun ChatScreen(
                     .height(1.dp)
                     .background(extendedColors.borderHairline)
             )
+
+            // Session reset failure chip -- a failed "Start Fresh" must not
+            // look like it succeeded (same dismissible-chip pattern the
+            // composer uses for attachmentError). Tap to dismiss.
+            appState.sessionResetError?.let { resetError ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 6.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(extendedColors.accentAmberSoft)
+                        .clickable { appState.sessionResetError = null }
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = resetError,
+                        style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.sp),
+                        color = extendedColors.accentAmber
+                    )
+                }
+            }
 
             // Message Stream List or Empty Starter State
             Box(

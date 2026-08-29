@@ -151,8 +151,10 @@ class FestoAppState(
     var pendingAttachment by mutableStateOf<PendingAttachment?>(null)
     var attachmentError by mutableStateOf<String?>(null)
 
-    // Search & Filter in drawer
-    var conversationSearchQuery by mutableStateOf("")
+    /** Set when the server-side session reset behind startFreshConversation()
+     * fails -- surfaced as a dismissible chip in ChatScreen (same pattern as
+     * attachmentError) instead of silently faking a local-only reset. */
+    var sessionResetError by mutableStateOf<String?>(null)
 
     // Voice State Machine
     var voiceState by mutableStateOf(VoiceState.IDLE)
@@ -218,15 +220,6 @@ class FestoAppState(
         isDrawerOpen = false
     }
 
-    fun selectConversation(id: String) {
-        activeConversationId = id
-        isDrawerOpen = false
-        val conv = conversations.find { it.id == id }
-        if (conv != null) {
-            selectedModel = availableModels.find { it.id == conv.modelId } ?: selectedModel
-        }
-    }
-
     fun selectModel(model: ModelOption) {
         selectedModel = model
         // Persist model onto active conversation
@@ -239,42 +232,28 @@ class FestoAppState(
         }
     }
 
-    fun createNewConversation(initialPrompt: String? = null) {
-        val newId = "conv-${UUID.randomUUID().toString().take(8)}"
-        val title = if (!initialPrompt.isNullOrBlank()) {
-            initialPrompt.take(30).trim() + if (initialPrompt.length > 30) "..." else ""
-        } else {
-            "New Conversation"
-        }
-        val newConv = Conversation(
-            id = newId,
-            title = title,
-            modelId = selectedModel.id,
-            createdAt = System.currentTimeMillis(),
-            updatedAt = System.currentTimeMillis()
-        )
-        conversations.add(0, newConv)
-        messagesMap[newId] = mutableStateListOf()
-        activeConversationId = newId
-        isDrawerOpen = false
-
-        if (!initialPrompt.isNullOrBlank()) {
-            sendMessage(initialPrompt)
-        }
-    }
-
-    fun deleteConversation(id: String) {
-        conversations.removeAll { it.id == id }
-        messagesMap.remove(id)
-        if (activeConversationId == id) {
-            activeConversationId = conversations.firstOrNull()?.id
-        }
-    }
-
-    fun renameConversation(id: String, newTitle: String) {
-        val index = conversations.indexOfFirst { it.id == id }
-        if (index != -1 && newTitle.isNotBlank()) {
-            conversations[index] = conversations[index].copy(title = newTitle.trim())
+    /** "Start Fresh" -- resets the ONE real server-side session (the same
+     * shared session Telegram uses) via POST /api/new, then clears the
+     * local message list. This is a real reset, not a fake second thread:
+     * without the server call, the next history fetch would resurrect
+     * everything that was cleared locally. */
+    fun startFreshConversation(initialPrompt: String? = null) {
+        coroutineScope.launch {
+            sessionResetError = null
+            val ok = WendyApi.resetSession()
+            if (!ok) {
+                // Do NOT clear local messages on a failed reset -- the
+                // server session is still live, and history would
+                // resurrect everything on the next fetch anyway. Surface
+                // the failure honestly instead.
+                sessionResetError = "Couldn't reset the session on the server. Your history with Wendy is unchanged."
+                return@launch
+            }
+            messagesMap[MAIN_CONVERSATION_ID]?.clear()
+            isDrawerOpen = false
+            if (!initialPrompt.isNullOrBlank()) {
+                sendMessage(initialPrompt)
+            }
         }
     }
 

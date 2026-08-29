@@ -53,5 +53,4 @@ data class ModelOption(
         else -> id.replaceFirstChar { it.uppercase() }
     }
     val name: String get() = label
-    val contextDisplay: String get() = "Shared with Telegram"
 }
