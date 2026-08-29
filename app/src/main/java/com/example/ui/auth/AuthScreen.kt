@@ -58,6 +58,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.AuthMode
@@ -328,7 +329,25 @@ fun AuthScreen(
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(14.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // Honest disclaimer: submitAuth() always succeeds
+                        // after a fixed delay -- there is no real account
+                        // system. The actual access control is the bearer
+                        // token baked into WendyApi.kt, not this screen.
+                        // Said plainly rather than letting a real-looking
+                        // login form imply otherwise.
+                        Text(
+                            text = "Single-device app -- any email/password (6+ chars) works. The real security boundary is the server token, not this screen.",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
+                            color = extendedColors.inkTertiary,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 8.dp)
+                        )
+
+                        Spacer(modifier = Modifier.height(10.dp))
 
                         // Demo Fill Shortcut Chip
                         Row(
