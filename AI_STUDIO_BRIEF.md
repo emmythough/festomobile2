@@ -16,9 +16,11 @@ build straight through this list.
 1. **Model picker** — backend is done and deployed; do the client half.
    Fixes a control that does nothing *and* a fake cost figure.
 2. **Cramped-text sweep** — one instance fixed, find the rest.
-3. **Memory browser** (§A) — real live endpoint, biggest capability win.
-4. **Floating voice capsule** (§B) — pure client-side, biggest feel win.
-5. **Markdown rendering + syntax highlighting** — table stakes.
+3. **Message rendering overhaul** (§R1–R3) — kill the assistant bubble,
+   then full markdown + LaTeX + tables + code highlighting via Markwon.
+   Owner-requested; this is what makes the app look serious.
+4. **Memory browser** (§A) — real live endpoint, biggest capability win.
+5. **Floating voice capsule** (§B) — pure client-side, biggest feel win.
 6. **Haptics** (§D) — near-zero effort.
 7. **Remaining 5 animations** — the polish pass.
 8. **Live work panel** (§C), settings screen, message actions,
@@ -237,6 +239,115 @@ Still to do, same priority order:
    ~800ms on tap instead (or in addition to — your call, but the icon
    feedback is the important part, the Toast alone isn't enough).
 
+## Message rendering overhaul (owner request — high priority)
+
+Two related changes to how assistant replies look. Do them together;
+they're the same surface.
+
+### R1. Kill the assistant bubble
+
+Owner's explicit instruction: **no chat bubble on the AI's reply.** This
+is the ChatGPT/Claude convention and it exists for a real reason — a
+bubble is fine around a sentence, but it fights long-form content
+(tables, code, math, lists), and it wastes horizontal space exactly
+where structured content needs it most.
+
+Target:
+- **Assistant messages:** no background fill, no border, no bubble
+  shape. Content sits directly on the page background, left-aligned,
+  using the **full content width**.
+- **User messages:** keep the bubble exactly as-is. The asymmetry is
+  the point — it's what makes speaker identity readable without a
+  bubble on both sides.
+
+In [`ChatMessageItem.kt`](app/src/main/java/com/example/ui/components/ChatMessageItem.kt):
+- The `Box` carrying `.clip(...)`, `.background(...)` and `.border(...)`
+  currently applies to both roles. Apply it **only when `isUser`**; the
+  assistant branch gets padding and nothing else.
+- `Column(modifier = Modifier.widthIn(max = 320.dp))` caps *both* roles
+  at 320dp. Keep that cap for user messages; remove it for assistant
+  messages (`fillMaxWidth()`), or a markdown table will be squeezed into
+  half the screen.
+- Re-check vertical rhythm afterward. Without a bubble's padding,
+  assistant messages need explicit spacing or consecutive turns will run
+  together. Give assistant blocks more generous vertical margin than
+  user bubbles need.
+- The `NovaAvatar` per assistant message is a judgment call once the
+  bubble is gone — if it reads as clutter against flat text, drop it and
+  let the model label line carry identity.
+
+### R2. Render everything, properly
+
+Requirement: the chat must render **markdown, LaTeX math, tables, and
+code** beautifully. Today `FormattedMessageContent` splits on ` ``` `
+and renders everything else as plain text — no bold, no lists, no
+links, no tables, no math.
+
+**Use [Markwon](https://github.com/noties/Markwon)** (`io.noties.markwon`).
+It is the mature Android markdown library, renders to native Spannables
+with **no WebView**, and — critically — covers this entire requirement in
+one consistent library via official plugins:
+
+| Need | Plugin |
+|---|---|
+| Core markdown (bold, lists, links, quotes) | `markwon-core` |
+| Tables | `ext-tables` |
+| LaTeX math | `ext-latex` |
+| Strikethrough | `ext-strikethrough` |
+| Task lists | `ext-tasklist` |
+| Code syntax highlighting | `syntax-highlight` |
+
+Wrap it in an `AndroidView` inside Compose, or use
+[compose-markdown](https://github.com/jeziellago/compose-markdown)
+which wraps Markwon as a single composable. Prefer one renderer for
+everything over stitching together per-feature libraries.
+
+Specifics that matter:
+- **LaTeX:** support both `$$...$$` (display) and `$...$` (inline).
+  Be aware `ext-latex` pulls in JLatexMath, which is a **large
+  dependency** — check the APK size delta and report it. If it's
+  unacceptable, say so rather than silently shipping it.
+- **Tables:** must scroll horizontally inside their own container. A
+  wide table must never make the whole chat scroll sideways.
+- **Code blocks:** ChatGPT's treatment is the bar — a header strip
+  showing the detected language on the left and a copy button on the
+  right, then the highlighted code below, with the block scrolling
+  horizontally rather than wrapping.
+- **Streaming:** re-parsing markdown on every update is the usual
+  performance trap, but v4 throttles edits to ~1.5s, so it's only a
+  handful of parses per turn — render markdown live rather than
+  deferring to the final. If profiling shows real jank, fall back to
+  plain text while streaming and full markdown on the final event, and
+  say that's what you did.
+
+### R3. Charts — needs a contract that does not exist yet
+
+The owner asked for charts. **Be honest about this one:** nothing in the
+backend emits chart data today, and no markdown convention for charts
+exists. ChatGPT doesn't render charts from markdown either — it
+generates them as images via code execution.
+
+Don't invent a format silently. The proposed contract, to be built
+client-side first so it's ready:
+
+````
+```chart
+{"type": "line", "title": "Revenue",
+ "series": [{"label": "2026", "data": [1, 2, 3]}],
+ "x_labels": ["Jan", "Feb", "Mar"]}
+```
+````
+
+Render with [Vico](https://github.com/patrykandpatrick/vico)
+(`com.patrykandpatrick.vico`) — actively maintained, Compose-first,
+Material 3. A `chart` fence that fails to parse must fall back to
+rendering as an ordinary code block, never crash.
+
+**This only produces visible charts once the backend prompts the model
+to emit those blocks**, which is a backend change nobody has made. Build
+the renderer, then report that the backend half is outstanding — do not
+claim charts work until a real reply renders one.
+
 ## Flagship features — backed by real endpoints, build these
 
 Each of these was checked against the running backend. Build order is
@@ -371,17 +482,8 @@ priority but above pure animation polish:
   icon. Regenerate needs a new `sendMessage`-style call in `WendyApi.kt`
   (reuse the exact same v4 contract, just re-post the prior user text);
   edit-and-resend needs the composer to accept a pre-filled draft.
-- **Real markdown rendering.** `FormattedMessageContent` currently only
-  special-cases triple-backtick code fences by string-splitting — no
-  bold/italic, no bullet/numbered lists, no links, no tables, no inline
-  code. A model-forward chat app without markdown rendering looks broken
-  next to any competitor. Pull in a maintained Compose markdown renderer
-  (evaluate `compose-markdown` or `richtext` — check current maintenance
-  status before committing to one) rather than hand-rolling a parser.
-- **Syntax highlighting in code blocks.** Currently plain monospace text
-  with no coloring at all. Even a lightweight regex-based highlighter for
-  the top 5-6 languages users will actually paste (Kotlin, Python, JS/TS,
-  JSON, bash) reads dramatically more premium than none.
+- *(Markdown rendering and code syntax highlighting moved up — see the
+  Message rendering overhaul section, §R2.)*
 - **A real Settings screen.** Doesn't exist as a dedicated surface right
   now — scattered across the drawer's memory/usage sheets. Add one,
   reachable from the drawer, holding at minimum the light/dark/system
