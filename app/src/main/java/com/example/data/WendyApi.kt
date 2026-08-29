@@ -54,18 +54,24 @@ data class HistoryTurn(val role: String, val text: String, val timestamp: Long)
 
 object WendyApi {
     // v4's real mobile gateway (gateways/api_gateway.py) -- the one Telegram
-    // now shares. Distinct port from the retired Gen 1 mobile_api.py (8090).
+    // now shares. Distinct port AND distinct bearer token from the retired
+    // Gen 1 mobile_api.py (8090) -- confirmed against the real
+    // WENDY_V4_API_TOKEN in /home/assistant/secrets/wendy_v4_api.env on the
+    // VPS, which is NOT the same value as Gen 1's token below. Mixing these
+    // up silently produces 401s that look identical to a network failure.
     private const val BASE_URL = "http://74.208.155.72:8091"
-    private const val API_TOKEN = "t-CWsqQbhMqW6bwXb0IsDBIOxfPWeHCMne2imx-zJJU"
+    private const val API_TOKEN = "65745cd7974c95ef560378df4b486156355e6899355381bef481dd778dec5f08"
 
     // v4's api_gateway.py exposes ONLY /api/v4/{health,message,replies} --
     // no history, no audio (§ v4/README.md "explicitly NOT built yet").
     // Gen 1's mobile_api.py (port 8090) is still deployed and still the only
     // place /api/history and /api/audio/* exist, so those three calls below
-    // stay pointed here. This is NOT the same conversation store sendMessage
-    // talks to -- it's the least-bad source for a chat backlog and voice
-    // I/O until v4 grows its own equivalents.
+    // stay pointed here, using Gen 1's own (different) token. This is NOT
+    // the same conversation store sendMessage talks to -- it's the
+    // least-bad source for a chat backlog and voice I/O until v4 grows its
+    // own equivalents.
     private const val GEN1_BASE_URL = "http://74.208.155.72:8090"
+    private const val GEN1_API_TOKEN = "t-CWsqQbhMqW6bwXb0IsDBIOxfPWeHCMne2imx-zJJU"
 
     private const val POLL_INTERVAL_MS = 700L
     private const val POLL_TIMEOUT_MS = 120_000L // matches v4's model-call budget; ample for tool use
@@ -171,7 +177,7 @@ object WendyApi {
     suspend fun fetchHistory(): List<HistoryTurn> = withContext(Dispatchers.IO) {
         val request = Request.Builder()
             .url("$GEN1_BASE_URL/api/history")
-            .header("Authorization", "Bearer $API_TOKEN")
+            .header("Authorization", "Bearer $GEN1_API_TOKEN")
             .get()
             .build()
         try {
@@ -208,7 +214,7 @@ object WendyApi {
                 .toRequestBody("application/json; charset=utf-8".toMediaType())
             val request = Request.Builder()
                 .url("$GEN1_BASE_URL/api/audio/transcribe")
-                .header("Authorization", "Bearer $API_TOKEN")
+                .header("Authorization", "Bearer $GEN1_API_TOKEN")
                 .post(body)
                 .build()
             client.newCall(request).execute().use { response ->
@@ -233,7 +239,7 @@ object WendyApi {
             }.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
             val request = Request.Builder()
                 .url("$GEN1_BASE_URL/api/audio/speak")
-                .header("Authorization", "Bearer $API_TOKEN")
+                .header("Authorization", "Bearer $GEN1_API_TOKEN")
                 .post(body)
                 .build()
             client.newCall(request).execute().use { response ->
