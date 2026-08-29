@@ -164,7 +164,9 @@ fun ConversationDrawer(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Quick Nav Links (Memory & Telemetry)
+            // Quick Nav Links (Memory & Telemetry). In HERMES mode the
+            // memory row opens the Wendy memory browser (gateway sessions
+            // + read-only transcripts); Gen 1 keeps the local memory sheet.
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -173,7 +175,11 @@ fun ConversationDrawer(
                     .border(1.dp, extendedColors.borderHairline, RoundedCornerShape(10.dp))
                     .clickable {
                         onClose()
-                        appState.isMemorySheetOpen = true
+                        if (appState.backendMode == BackendMode.HERMES) {
+                            appState.isMemoryBrowserOpen = true
+                        } else {
+                            appState.isMemorySheetOpen = true
+                        }
                     }
                     .padding(horizontal = 10.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -190,7 +196,11 @@ fun ConversationDrawer(
                         modifier = Modifier.size(16.dp)
                     )
                     Text(
-                        text = "Cross-Session Memory",
+                        text = if (appState.backendMode == BackendMode.HERMES) {
+                            "Wendy memory"
+                        } else {
+                            "Cross-Session Memory"
+                        },
                         style = MaterialTheme.typography.labelMedium.copy(
                             fontWeight = FontWeight.Medium,
                             fontSize = 12.5.sp
@@ -205,7 +215,11 @@ fun ConversationDrawer(
                         .padding(horizontal = 6.dp, vertical = 2.dp)
                 ) {
                     Text(
-                        text = "${appState.memories.size}",
+                        text = if (appState.backendMode == BackendMode.HERMES) {
+                            "${appState.hermesSessions.size}"
+                        } else {
+                            "${appState.memories.size}"
+                        },
                         style = MaterialTheme.typography.labelSmall.copy(
                             fontWeight = FontWeight.Bold,
                             fontSize = 10.sp,

@@ -255,6 +255,8 @@ class FestoAppState(
         streamingJob?.cancel()
         streamingTool = null
         hermesNotice = null
+        isMemoryBrowserOpen = false
+        closeMemoryTranscript()
         isStreamingResponse = false
         _backendMode = mode
         backendPrefs?.saveMode(mode)
@@ -345,6 +347,64 @@ class FestoAppState(
         hermesNotice = null
         isHistoryLoading = true
         coroutineScope.launch { loadHermesHistory() }
+    }
+
+    // ---- Memory browser (HERMES mode only) ----
+    // The gateway has no /api/search endpoint, so "memory browsing" is
+    // exactly what it does offer: list sessions, read transcripts, and
+    // filter in the client. Nothing here invents server features.
+
+    /** Full-screen Wendy memory browser (opened from the drawer's memory
+     * row in HERMES mode; Gen 1 keeps its local memory sheet). */
+    var isMemoryBrowserOpen by mutableStateOf(false)
+
+    /** The session whose transcript the browser is reading (null = the
+     * session list is showing). */
+    var memoryBrowserSessionId by mutableStateOf<String?>(null)
+        private set
+
+    var memoryBrowserTitle by mutableStateOf<String?>(null)
+        private set
+
+    /** Read-only snapshot of the browsed session's transcript. Kept apart
+     * from the chat transcript so browsing never touches the live
+     * conversation state. */
+    val memoryBrowserMessages = mutableStateListOf<HermesHistoryEntry>()
+    var memoryBrowserLoading by mutableStateOf(false)
+        private set
+    var memoryBrowserError by mutableStateOf<String?>(null)
+        private set
+
+    fun openMemoryTranscript(session: HermesSession) {
+        if (memoryBrowserSessionId == session.id) return
+        memoryBrowserSessionId = session.id
+        memoryBrowserTitle = session.title
+        memoryBrowserError = null
+        memoryBrowserMessages.clear()
+        coroutineScope.launch {
+            memoryBrowserLoading = true
+            when (val result = HermesApi.fetchTranscript(hermesBaseUrl, hermesApiKey, session.id)) {
+                is HermesTranscriptResult.Ready -> {
+                    memoryBrowserMessages.clear()
+                    memoryBrowserMessages.addAll(result.entries)
+                    if (result.entries.isEmpty()) {
+                        memoryBrowserError = "No messages in this session yet."
+                    }
+                }
+                is HermesTranscriptResult.Failed -> {
+                    memoryBrowserError = result.message?.takeIf { it.isNotBlank() }
+                        ?: "Couldn't load this conversation."
+                }
+            }
+            memoryBrowserLoading = false
+        }
+    }
+
+    fun closeMemoryTranscript() {
+        memoryBrowserSessionId = null
+        memoryBrowserTitle = null
+        memoryBrowserError = null
+        memoryBrowserMessages.clear()
     }
 
 

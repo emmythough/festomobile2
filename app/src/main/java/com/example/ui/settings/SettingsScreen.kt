@@ -63,6 +63,7 @@ import com.example.data.BackendMode
 import com.example.data.FestoAppState
 import com.example.data.HermesSession
 import com.example.data.ThemeMode
+import com.example.ui.components.hermesSessionSubtitle
 import com.example.ui.theme.FestoTheme
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -675,28 +676,4 @@ private fun HermesSessionRow(
     }
 }
 
-private fun sessionSubtitle(session: HermesSession): String {
-    val parts = mutableListOf<String>()
-    parts.add(
-        "${session.messageCount} ${if (session.messageCount == 1) "message" else "messages"}"
-    )
-    lastActivityLabel(session.lastActivityAtMs)?.let { parts.add(it) }
-    if (!session.isTelegram && session.source != null) {
-        parts.add("via ${session.source}")
-    }
-    return parts.joinToString(" · ")
-}
-
-private fun lastActivityLabel(lastActivityAtMs: Long?): String? {
-    if (lastActivityAtMs == null) return null
-    val diffMs = System.currentTimeMillis() - lastActivityAtMs
-    if (diffMs < 0) return "just now"
-    val minutes = diffMs / 60_000
-    return when {
-        minutes < 1L -> "just now"
-        minutes < 60L -> "${minutes}m ago"
-        minutes < 60L * 24 -> "${minutes / 60}h ago"
-        minutes < 60L * 24 * 30 -> "${minutes / (60 * 24)}d ago"
-        else -> null // too stale to be useful; the count alone identifies it
-    }
-}
+private fun sessionSubtitle(session: HermesSession): String = hermesSessionSubtitle(session)

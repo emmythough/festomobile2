@@ -30,6 +30,7 @@ import com.example.ui.auth.AuthScreen
 import com.example.ui.chat.ChatScreen
 import com.example.ui.drawer.ConversationDrawer
 import com.example.ui.files.FilesSheet
+import com.example.ui.memory.MemoryScreen
 import com.example.ui.memory.MemorySheet
 import com.example.ui.models.ModelPickerSheet
 import com.example.ui.settings.SettingsScreen
@@ -124,6 +125,21 @@ fun AppRoot(
                     FilesSheet(
                         appState = appState,
                         onDismiss = { appState.isFilesSheetOpen = false }
+                    )
+                }
+
+                // Full-Screen Wendy Memory Screen (HERMES mode only --
+                // gateway session list + read-only transcripts with a
+                // client-side search filter; the gateway has no search
+                // endpoint to call).
+                AnimatedVisibility(
+                    visible = appState.isMemoryBrowserOpen,
+                    enter = fadeIn(),
+                    exit = fadeOut()
+                ) {
+                    MemoryScreen(
+                        appState = appState,
+                        onClose = { appState.isMemoryBrowserOpen = false }
                     )
                 }
 

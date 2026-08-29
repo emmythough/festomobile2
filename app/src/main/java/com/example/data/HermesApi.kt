@@ -79,6 +79,15 @@ sealed class HermesSessionsResult {
     data class Failed(val message: String? = null) : HermesSessionsResult()
 }
 
+/** Result of GET /api/sessions/{id}/messages for the read-only memory
+ * browser. A sealed result instead of an empty list because "gateway
+ * unreachable / bad id" must render differently from "this session is
+ * empty" -- same reasoning as HermesSessionsResult. */
+sealed class HermesTranscriptResult {
+    data class Ready(val entries: List<HermesHistoryEntry>) : HermesTranscriptResult()
+    data class Failed(val message: String? = null) : HermesTranscriptResult()
+}
+
 /** One turn from GET /api/sessions/{id}/messages -- role is
  * "user"/"assistant"/"tool"; the transcript renders user+assistant and
  * skips tool rows (they are Wendy's plumbing, not conversation bubbles). */
@@ -334,6 +343,32 @@ object HermesApi {
                     }
             } catch (_: Exception) {
                 emptyList()
+            }
+        }
+
+    /** Full transcript of any session for the read-only memory browser.
+     * Distinct from fetchMessages() because browsing an arbitrary session
+     * must distinguish "gateway said no" from "no messages" instead of
+     * silently rendering a blank page. The endpoint takes no pagination
+     * params (verified contract) -- the full history loads and the
+     * browser renders it lazily. Never throws. */
+    suspend fun fetchTranscript(baseUrl: String, apiKey: String, sessionId: String): HermesTranscriptResult =
+        withContext(Dispatchers.IO) {
+            try {
+                val encoded = java.net.URLEncoder.encode(sessionId, "UTF-8")
+                client.newCall(authed("${base(baseUrl)}/api/sessions/$encoded/messages", apiKey).get().build())
+                    .execute().use { response ->
+                        if (!response.isSuccessful) {
+                            return@withContext HermesTranscriptResult.Failed(
+                                errorDetail(response) ?: "HTTP ${response.code}"
+                            )
+                        }
+                        val body = response.body?.string()
+                            ?: return@withContext HermesTranscriptResult.Failed("empty response body")
+                        HermesTranscriptResult.Ready(parseHistory(body))
+                    }
+            } catch (e: Exception) {
+                HermesTranscriptResult.Failed(e.message)
             }
         }
 
