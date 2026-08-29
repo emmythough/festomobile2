@@ -12,12 +12,101 @@ sealed class MessageBlock {
     data class Markdown(val content: String) : MessageBlock()
     data class Code(val code: String, val language: String) : MessageBlock()
     data class Chart(val spec: ChartSpec, val fallbackRaw: String) : MessageBlock()
+
+    /** Assistant markdown image ![alt](src) -- the Hermes gateway inlines
+     * Wendy's images as data URLs ("data:image/png;base64,..."); http(s)
+     * image URLs are supported too. Rendered by MessageImageBlock because
+     * the app's Markwon setup has no images plugin. */
+    data class Image(val source: String, val alt: String) : MessageBlock()
+
+    /** A bare audio file path Wendy dropped in her reply text (how the
+     * gateway surfaces generated audio) -- rendered as a "audio: file"
+     * chip by MessageAudioChip, no player this pass. */
+    data class AudioFile(val path: String) : MessageBlock()
+}
+
+/** `![alt](src)` -- src must be space/paren-free, which both data URLs
+ * (base64 + "data:image/...;base64,") and http(s) URLs satisfy. */
+private val markdownImageRegex = Regex("!\\[([^\\]]*)\\]\\(([^)\\s]+)\\)")
+
+/** A path-like token ending in an audio extension -- how the gateway
+ * surfaces generated audio files in reply text. Deliberately conservative:
+ * not preceded by "(", a word char, "@" or "." (so markdown links,
+ * sentence words and email-ish strings don't half-match) and not followed
+ * by a word char or "." (so "song.mp3." keeps its sentence period). */
+private val audioPathRegex = Regex(
+    "(?<![\\w@(.])[\\w./\\\\-]+\\.(?:mp3|m4a|m4b|wav|ogg|oga|flac|aac|opus|wma)(?![\\w.])",
+    RegexOption.IGNORE_CASE
+)
+
+/** Splits a plain markdown segment into Markdown / Image / AudioFile
+ * blocks. Text without media comes back as a single Markdown block --
+ * identical to the pre-media behavior. */
+private fun splitMediaBlocks(markdown: String): List<MessageBlock> {
+    if (markdown.isBlank()) return emptyList()
+
+    val imageMatches = markdownImageRegex.findAll(markdown).toList()
+    if (imageMatches.isEmpty()) {
+        return splitAudioBlocks(markdown)
+    }
+
+    val blocks = mutableListOf<MessageBlock>()
+    var cursor = 0
+    for (match in imageMatches) {
+        if (match.range.first > cursor) {
+            val before = markdown.substring(cursor, match.range.first).trim()
+            if (before.isNotEmpty()) {
+                blocks.addAll(splitAudioBlocks(before))
+            }
+        }
+        blocks.add(
+            MessageBlock.Image(
+                source = match.groupValues[2],
+                alt = match.groupValues[1].trim()
+            )
+        )
+        cursor = match.range.last + 1
+    }
+    if (cursor < markdown.length) {
+        val tail = markdown.substring(cursor).trim()
+        if (tail.isNotEmpty()) {
+            blocks.addAll(splitAudioBlocks(tail))
+        }
+    }
+    return blocks
+}
+
+private fun splitAudioBlocks(markdown: String): List<MessageBlock> {
+    val matches = audioPathRegex.findAll(markdown).toList()
+    if (matches.isEmpty()) {
+        return listOf(MessageBlock.Markdown(markdown))
+    }
+
+    val blocks = mutableListOf<MessageBlock>()
+    var cursor = 0
+    for (match in matches) {
+        if (match.range.first > cursor) {
+            val before = markdown.substring(cursor, match.range.first).trim()
+            if (before.isNotEmpty()) {
+                blocks.add(MessageBlock.Markdown(before))
+            }
+        }
+        blocks.add(MessageBlock.AudioFile(path = match.value))
+        cursor = match.range.last + 1
+    }
+    if (cursor < markdown.length) {
+        val tail = markdown.substring(cursor).trim()
+        if (tail.isNotEmpty()) {
+            blocks.add(MessageBlock.Markdown(tail))
+        }
+    }
+    return blocks
 }
 
 fun parseMessageBlocks(raw: String): List<MessageBlock> {
     if (raw.isBlank()) return emptyList()
     if (!raw.contains("```")) {
-        return listOf(MessageBlock.Markdown(raw.trim()))
+        return splitMediaBlocks(raw.trim())
     }
 
     val blocks = mutableListOf<MessageBlock>()
@@ -35,7 +124,7 @@ fun parseMessageBlocks(raw: String): List<MessageBlock> {
         if (start > lastIndex) {
             val textBefore = raw.substring(lastIndex, start).trim()
             if (textBefore.isNotEmpty()) {
-                blocks.add(MessageBlock.Markdown(textBefore))
+                blocks.addAll(splitMediaBlocks(textBefore))
             }
         }
 
@@ -60,7 +149,7 @@ fun parseMessageBlocks(raw: String): List<MessageBlock> {
     if (lastIndex < raw.length) {
         val remaining = raw.substring(lastIndex).trim()
         if (remaining.isNotEmpty()) {
-            blocks.add(MessageBlock.Markdown(remaining))
+            blocks.addAll(splitMediaBlocks(remaining))
         }
     }
 
@@ -88,6 +177,12 @@ fun RichMessageRenderer(
                 }
                 is MessageBlock.Chart -> {
                     MessageChartBlock(spec = block.spec)
+                }
+                is MessageBlock.Image -> {
+                    MessageImageBlock(source = block.source, alt = block.alt)
+                }
+                is MessageBlock.AudioFile -> {
+                    MessageAudioChip(path = block.path)
                 }
             }
         }

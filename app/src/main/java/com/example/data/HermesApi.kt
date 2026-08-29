@@ -93,6 +93,22 @@ sealed class HermesTranscriptResult {
  * skips tool rows (they are Wendy's plumbing, not conversation bubbles). */
 data class HermesHistoryEntry(val role: String, val content: String, val createdAtMs: Long?)
 
+/** One picked photo waiting to ride the next HERMES message as a
+ * content-array image part. `jpegBase64` is raw base64 (NO_WRAP, no data:
+ * URI prefix) of the client-side downscaled re-encode (max 1280px longest
+ * edge, JPEG quality ~80 -- see ChatScreen's picker pipeline), so a pick
+ * lands well under the gateway's ~5MB sensible ceiling. */
+data class HermesImageAttachment(
+    val filename: String,
+    val jpegBase64: String,
+    val sizeBytes: Int
+) {
+    /** The gateway accepts image data URLs and http(s) image URLs inside
+     * image_url parts (verified contract) -- a pick always rides as a
+     * data URL, no upload endpoint involved. */
+    fun dataUrl(): String = "data:image/jpeg;base64,$jpegBase64"
+}
+
 /** Client for the Hermes gateway -- the backend Telegram's Wendy brain
  * runs behind. Shared-session mode is the whole point: the app chats
  * inside ONE gateway session that Telegram also uses, so both surfaces
@@ -120,7 +136,11 @@ object HermesApi {
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.SECONDS) // a streaming turn can legitimately run minutes (tool use)
-        .writeTimeout(10, TimeUnit.SECONDS)
+        // 30s (was 10s): a multimodal turn's body carries a downscaled
+        // photo as base64 (~33% larger than raw) -- 10s was too tight on a
+        // weak mobile uplink. Text-only turns are unaffected. This client
+        // is Hermes-only; the Gen 1 backend keeps its own in WendyApi.
+        .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
     private fun base(baseUrl: String) = baseUrl.trim().trimEnd('/')
@@ -144,6 +164,32 @@ object HermesApi {
         sessionId: String,
         message: String,
         sessionKey: String? = null,
+    ): Flow<HermesEvent> = streamChatPayload(baseUrl, apiKey, sessionId, message, sessionKey)
+
+    /** Multimodal variant of [streamChat]: `parts` is a JSONArray of
+     * content parts sent as the body's "message" (verified gateway
+     * contract):
+     *   {"type":"text","text":"what is this?"}
+     *   {"type":"image_url","image_url":{"url":"data:image/jpeg;base64,..."}}
+     * Image data URLs and http(s) image URLs are accepted; the gateway
+     * has no audio/STT part type. Same event stream as streamChat. */
+    fun streamChatMultimodal(
+        baseUrl: String,
+        apiKey: String,
+        sessionId: String,
+        parts: JSONArray,
+        sessionKey: String? = null,
+    ): Flow<HermesEvent> = streamChatPayload(baseUrl, apiKey, sessionId, parts, sessionKey)
+
+    /** Shared body of both stream variants -- "message" is either a plain
+     * string or a content-part JSONArray; everything downstream (SSE
+     * frames, events, session rotation) is identical. */
+    private fun streamChatPayload(
+        baseUrl: String,
+        apiKey: String,
+        sessionId: String,
+        message: Any,
+        sessionKey: String?,
     ): Flow<HermesEvent> = callbackFlow {
         val url = "${base(baseUrl)}/api/sessions/" +
             java.net.URLEncoder.encode(sessionId, "UTF-8") + "/chat/stream"

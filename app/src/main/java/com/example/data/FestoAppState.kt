@@ -14,6 +14,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.collect
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.IOException
 import java.util.UUID
 
@@ -255,6 +257,10 @@ class FestoAppState(
         streamingJob?.cancel()
         streamingTool = null
         hermesNotice = null
+        // A pending HERMES photo must not leak across a mode switch: on
+        // Gen 1 it could never be sent (content-array is Hermes-only), so
+        // drop it instead of showing a chip for an unusable attachment.
+        pendingHermesImage = null
         isMemoryBrowserOpen = false
         closeMemoryTranscript()
         isStreamingResponse = false
@@ -562,15 +568,60 @@ class FestoAppState(
         attachmentError = null
     }
 
+    /** HERMES photo picked in the composer, waiting to ride the next sent
+     * message as a content-array image part. Kept apart from the Gen 1
+     * [pendingAttachment] (a document file that flows through the server's
+     * attachment field) because the gateway takes inline image data URLs
+     * instead. Cleared once sendMessage() consumes it (success or failure
+     * -- a failed send shouldn't silently re-attach a stale photo), same
+     * lifecycle rule as pendingAttachment. GEN1 never sets or reads this. */
+    var pendingHermesImage by mutableStateOf<HermesImageAttachment?>(null)
+        private set
+
+    /** Called from the composer's photo-picker result with the ALREADY
+     * downscaled JPEG bytes (max 1280px, quality ~80 -- the decode runs in
+     * the UI layer, which owns the Context). Caps at 4MB raw: base64
+     * inflates by ~33%, so this keeps the request body comfortably under
+     * the gateway's ~5MB sensible ceiling instead of letting the gateway
+     * be the only backstop. Sets attachmentError on rejection (the same
+     * chip the Gen 1 path reports through). */
+    fun setPendingHermesImage(filename: String, jpegBytes: ByteArray) {
+        if (_backendMode != BackendMode.HERMES) return
+        if (jpegBytes.isEmpty()) {
+            attachmentError = "\"$filename\" appears to be empty."
+            return
+        }
+        if (jpegBytes.size > 4 * 1024 * 1024) {
+            attachmentError = "\"$filename\" is still too large after downscaling (${jpegBytes.size / (1024 * 1024)}MB)."
+            return
+        }
+        attachmentError = null
+        pendingHermesImage = HermesImageAttachment(
+            filename = filename,
+            jpegBase64 = android.util.Base64.encodeToString(jpegBytes, android.util.Base64.NO_WRAP),
+            sizeBytes = jpegBytes.size
+        )
+    }
+
+    fun clearPendingHermesImage() {
+        pendingHermesImage = null
+        attachmentError = null
+    }
+
     fun sendMessage(text: String) {
         val attachment = pendingAttachment
-        // A message needs SOME content -- text, or an attachment, or both;
-        // an attachment alone (no caption) is a real, valid send, matching
-        // how Telegram already treats a bare photo/document upload.
-        if ((text.isBlank() && attachment == null) || isStreamingResponse) return
+        val image = pendingHermesImage
+        // A message needs SOME content -- text, an attachment, a photo, or
+        // any combination; an attachment alone (no caption) is a real,
+        // valid send, matching how Telegram already treats a bare
+        // photo/document upload. pendingHermesImage is only ever non-null
+        // in HERMES mode, so the GEN1 check is unchanged in practice.
+        if ((text.isBlank() && attachment == null && image == null) || isStreamingResponse) return
 
-        // Hermes mode has its own send path: no attachment field in the
-        // gateway contract, and a shared session must be picked first.
+        // Hermes mode has its own send path: text and/or a picked photo go
+        // out as a content-array "message" (verified gateway contract), a
+        // Gen 1 file attachment has no gateway equivalent, and a shared
+        // session must be picked first.
         if (_backendMode == BackendMode.HERMES) {
             if (attachment != null) {
                 // Refuse honestly instead of silently dropping the file:
@@ -585,18 +636,23 @@ class FestoAppState(
                 return
             }
             pendingAttachment = null
+            pendingHermesImage = null
+            val trimmed = text.trim()
             val hermesMessages = messagesMap.getOrPut(MAIN_CONVERSATION_ID) { mutableStateListOf() }
             hermesMessages.add(
                 Message(
                     id = "msg-${UUID.randomUUID().toString().take(8)}",
                     conversationId = MAIN_CONVERSATION_ID,
                     role = Role.USER,
-                    content = text.trim(),
+                    content = trimmed,
                     modality = Modality.TEXT,
-                    timestamp = System.currentTimeMillis()
+                    timestamp = System.currentTimeMillis(),
+                    // Display-only badge on the user bubble; the photo
+                    // itself already left the device inside the request.
+                    attachmentFilename = image?.filename
                 )
             )
-            streamAssistantResponseHermes(MAIN_CONVERSATION_ID, sessionId, text.trim())
+            streamAssistantResponseHermes(MAIN_CONVERSATION_ID, sessionId, trimmed, image)
             return
         }
 
@@ -735,8 +791,15 @@ class FestoAppState(
      * from the legacy path: tool.* events surface as an activity line
      * (streamingTool), run.completed's session_id is authoritative and
      * gets persisted (compression may rotate it), and the gateway picks
-     * the model -- there's no model parameter to forward. */
-    private fun streamAssistantResponseHermes(convId: String, sessionId: String, userPrompt: String) {
+     * the model -- there's no model parameter to forward. A non-null
+     * `image` switches the request body to the multimodal content-array
+     * form (text part + image_url part) instead of a plain string. */
+    private fun streamAssistantResponseHermes(
+        convId: String,
+        sessionId: String,
+        userPrompt: String,
+        image: HermesImageAttachment? = null
+    ) {
         streamingJob?.cancel()
         isStreamingResponse = true
 
@@ -761,13 +824,37 @@ class FestoAppState(
             var finalUsage: ServerUsage? = null
             val startedAt = System.currentTimeMillis()
 
-            HermesApi.streamChat(
-                baseUrl = hermesBaseUrl,
-                apiKey = hermesApiKey,
-                sessionId = sessionId,
-                message = userPrompt,
-                sessionKey = sessionKey
-            ).collect { event ->
+            val turnFlow = if (image != null) {
+                // Verified multimodal contract: "message" may be a content
+                // array of {"type":"text"} / {"type":"image_url"} parts.
+                // The image rides as a data URL; only a non-blank caption
+                // produces a text part (an image-only send is valid).
+                val parts = JSONArray()
+                if (userPrompt.isNotBlank()) {
+                    parts.put(JSONObject().put("type", "text").put("text", userPrompt))
+                }
+                parts.put(
+                    JSONObject()
+                        .put("type", "image_url")
+                        .put("image_url", JSONObject().put("url", image.dataUrl()))
+                )
+                HermesApi.streamChatMultimodal(
+                    baseUrl = hermesBaseUrl,
+                    apiKey = hermesApiKey,
+                    sessionId = sessionId,
+                    parts = parts,
+                    sessionKey = sessionKey
+                )
+            } else {
+                HermesApi.streamChat(
+                    baseUrl = hermesBaseUrl,
+                    apiKey = hermesApiKey,
+                    sessionId = sessionId,
+                    message = userPrompt,
+                    sessionKey = sessionKey
+                )
+            }
+            turnFlow.collect { event ->
                 when (event) {
                     is HermesEvent.Delta -> {
                         streamingTool = null // assistant is talking; tool activity is over
