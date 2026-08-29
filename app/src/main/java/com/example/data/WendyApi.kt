@@ -70,6 +70,13 @@ data class ServerUsage(
 /** One turn from GET /api/history -- role is "user" or "assistant". */
 data class HistoryTurn(val role: String, val text: String, val timestamp: Long)
 
+/** A file to attach to the next message. Mirrors Telegram's own real,
+ * working file path: the server saves it to the shared inbox/ and tells
+ * Wendy where it lives as plain text -- her own file tools do the actual
+ * reading, not a multimodal image API. `dataBase64` is raw base64, no
+ * data: URI prefix. Server-side cap is 15MB decoded (413 past that). */
+data class PendingAttachment(val filename: String, val dataBase64: String)
+
 object WendyApi {
     // Gen 1's mobile_api.py -- the one real backend chat, history, models,
     // and audio all live on. Single base URL, single token, on purpose:
@@ -94,9 +101,21 @@ object WendyApi {
      * `model` is optional -- omitted means "whatever is already selected"
      * (shared with Telegram); passing it also SWITCHES the shared
      * selection, same as sending /model on Telegram would. */
-    fun sendMessage(message: String, model: String? = null): Flow<WendyEvent> = callbackFlow {
+    fun sendMessage(
+        message: String,
+        model: String? = null,
+        attachment: PendingAttachment? = null,
+    ): Flow<WendyEvent> = callbackFlow {
         val json = JSONObject().put("message", message)
         if (model != null) json.put("model", model)
+        if (attachment != null) {
+            json.put(
+                "attachment",
+                JSONObject()
+                    .put("filename", attachment.filename)
+                    .put("data", attachment.dataBase64)
+            )
+        }
         val body = json.toString()
             .toRequestBody("application/json; charset=utf-8".toMediaType())
         val request = authed("$BASE_URL/api/chat")

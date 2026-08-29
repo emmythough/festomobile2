@@ -126,6 +126,13 @@ class FestoAppState(
     var isUsageSheetOpen by mutableStateOf(false)
     var isVoiceOverlayOpen by mutableStateOf(false)
 
+    /** A file picked in the composer, waiting to ride on the next sent
+     * message. Cleared once sendMessage() consumes it (success or
+     * failure -- a failed send shouldn't leave a stale attachment
+     * silently re-attached to whatever the user types next). */
+    var pendingAttachment by mutableStateOf<PendingAttachment?>(null)
+    var attachmentError by mutableStateOf<String?>(null)
+
     // Search & Filter in drawer
     var conversationSearchQuery by mutableStateOf("")
 
@@ -253,8 +260,40 @@ class FestoAppState(
         }
     }
 
+    /** Called from the composer's file-picker result. Caps client-side at
+     * 12MB raw (server's real limit is 15MB decoded; base64 inflates by
+     * ~33%, so this leaves real headroom rather than relying on the
+     * server to be the only backstop). Sets attachmentError on rejection
+     * instead of silently dropping the pick. */
+    fun setPendingAttachment(filename: String, bytes: ByteArray) {
+        val maxRawBytes = 12 * 1024 * 1024
+        if (bytes.size > maxRawBytes) {
+            attachmentError = "\"$filename\" is too large (${bytes.size / (1024 * 1024)}MB, limit 12MB)."
+            return
+        }
+        if (bytes.isEmpty()) {
+            attachmentError = "\"$filename\" appears to be empty."
+            return
+        }
+        attachmentError = null
+        pendingAttachment = PendingAttachment(
+            filename = filename,
+            dataBase64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+        )
+    }
+
+    fun clearPendingAttachment() {
+        pendingAttachment = null
+        attachmentError = null
+    }
+
     fun sendMessage(text: String) {
-        if (text.isBlank() || isStreamingResponse) return
+        val attachment = pendingAttachment
+        // A message needs SOME content -- text, or an attachment, or both;
+        // an attachment alone (no caption) is a real, valid send, matching
+        // how Telegram already treats a bare photo/document upload.
+        if ((text.isBlank() && attachment == null) || isStreamingResponse) return
+        pendingAttachment = null
 
         var targetConvId = activeConversationId
         if (targetConvId == null) {
@@ -289,15 +328,16 @@ class FestoAppState(
             role = Role.USER,
             content = text.trim(),
             modality = Modality.TEXT,
-            timestamp = System.currentTimeMillis()
+            timestamp = System.currentTimeMillis(),
+            attachmentFilename = attachment?.filename
         )
         convMessages.add(userMessage)
 
         // Stream assistant reply
-        streamAssistantResponse(targetConvId, text)
+        streamAssistantResponse(targetConvId, text, attachment)
     }
 
-    private fun streamAssistantResponse(convId: String, userPrompt: String) {
+    private fun streamAssistantResponse(convId: String, userPrompt: String, attachment: PendingAttachment? = null) {
         streamingJob?.cancel()
         isStreamingResponse = true
 
@@ -322,7 +362,11 @@ class FestoAppState(
             var finalUsage: ServerUsage? = null
             val startedAt = System.currentTimeMillis()
 
-            WendyApi.sendMessage(userPrompt, currentSelectedModel.id).collect { event ->
+            // Server tolerates a blank message when an attachment rides
+            // along (it falls back to just the file-location note) --
+            // the earlier check in sendMessage() already guarantees at
+            // least one of text/attachment is real.
+            WendyApi.sendMessage(userPrompt, currentSelectedModel.id, attachment).collect { event ->
                 when (event) {
                     is WendyEvent.Delta -> {
                         fullResponse = event.text

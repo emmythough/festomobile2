@@ -24,5 +24,8 @@ data class Message(
     val costUsd: Double? = null,
     val audioDurationSec: Float? = null,
     val isStreaming: Boolean = false,
-    val isError: Boolean = false
+    val isError: Boolean = false,
+    /** Set on a user message that carried a file attachment -- display
+     * only, the actual bytes already left the device with the request. */
+    val attachmentFilename: String? = null
 )

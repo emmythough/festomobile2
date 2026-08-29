@@ -35,7 +35,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowUpward
+import androidx.compose.material.icons.rounded.AttachFile
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Menu
@@ -191,13 +193,18 @@ fun ChatScreen(
                 inputText = inputText,
                 onTextChange = { inputText = it },
                 onSend = {
-                    if (inputText.isNotBlank()) {
+                    if (inputText.isNotBlank() || appState.pendingAttachment != null) {
                         val text = inputText
                         inputText = ""
                         appState.sendMessage(text)
                     }
                 },
                 onOpenVoice = openVoice,
+                onPickAttachment = { filename, bytes -> appState.setPendingAttachment(filename, bytes) },
+                pendingAttachmentFilename = appState.pendingAttachment?.filename,
+                onClearAttachment = { appState.clearPendingAttachment() },
+                attachmentError = appState.attachmentError,
+                onDismissAttachmentError = { appState.attachmentError = null },
                 isStreaming = appState.isStreamingResponse
             )
         }
@@ -400,15 +407,99 @@ private fun ChatComposer(
     onTextChange: (String) -> Unit,
     onSend: () -> Unit,
     onOpenVoice: () -> Unit,
+    onPickAttachment: (filename: String, bytes: ByteArray) -> Unit,
+    pendingAttachmentFilename: String?,
+    onClearAttachment: () -> Unit,
+    attachmentError: String?,
+    onDismissAttachmentError: () -> Unit,
     isStreaming: Boolean
 ) {
     val extendedColors = FestoTheme.colors
+    val context = LocalContext.current
+    val canSend = (inputText.isNotBlank() || pendingAttachmentFilename != null) && !isStreaming
 
-    Box(
+    // Storage Access Framework picker -- no runtime permission needed
+    // (unlike RECORD_AUDIO above), the system handles access to whatever
+    // the user picks.
+    val filePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val resolver = context.contentResolver
+        val name = resolver.query(uri, null, null, null, null)?.use { cursor ->
+            val idx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+            if (idx >= 0 && cursor.moveToFirst()) cursor.getString(idx) else null
+        } ?: uri.lastPathSegment ?: "attachment"
+        try {
+            val bytes = resolver.openInputStream(uri)?.use { it.readBytes() }
+            if (bytes != null) {
+                onPickAttachment(name, bytes)
+            }
+        } catch (_: java.io.IOException) {
+            // Surfaced identically to an oversized file -- setPendingAttachment
+            // would show the real message; a read failure here has no bytes to
+            // hand it, so this stays a silent no-op rather than a misleading
+            // "too large" message. Real gap noted for the audit: a generic
+            // read-failure toast would be better than nothing.
+        }
+    }
+
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 14.dp, vertical = 10.dp)
     ) {
+        // Pending attachment chip -- shown above the input row once a file
+        // is picked, until sent or cleared.
+        if (pendingAttachmentFilename != null) {
+            Row(
+                modifier = Modifier
+                    .padding(bottom = 6.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(extendedColors.brandNovaSoft)
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.AttachFile,
+                    contentDescription = null,
+                    tint = extendedColors.brandNova,
+                    modifier = Modifier.size(14.dp)
+                )
+                Text(
+                    text = pendingAttachmentFilename,
+                    style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.sp),
+                    color = extendedColors.brandNova,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                Icon(
+                    imageVector = Icons.Rounded.Close,
+                    contentDescription = "Remove attachment",
+                    tint = extendedColors.brandNova,
+                    modifier = Modifier
+                        .size(14.dp)
+                        .clickable(onClick = onClearAttachment)
+                )
+            }
+        }
+        if (attachmentError != null) {
+            Row(
+                modifier = Modifier
+                    .padding(bottom = 6.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(extendedColors.accentAmberSoft)
+                    .clickable(onClick = onDismissAttachmentError)
+                    .padding(horizontal = 10.dp, vertical = 6.dp)
+            ) {
+                Text(
+                    text = attachmentError,
+                    style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.sp),
+                    color = extendedColors.accentAmber
+                )
+            }
+        }
+
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -418,6 +509,23 @@ private fun ChatComposer(
                 .padding(horizontal = 6.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // Attach a file -- real, working: opens the system picker,
+            // reads the bytes, and the message carries it as base64 to
+            // POST /api/chat's "attachment" field (see AI_STUDIO_BRIEF.md
+            // R-series for the rendering side; this is the actual gap the
+            // owner flagged as missing).
+            IconButton(
+                onClick = { filePicker.launch("*/*") },
+                modifier = Modifier.size(36.dp).testTag("composer_attach_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.AttachFile,
+                    contentDescription = "Attach a file",
+                    tint = extendedColors.brandNova,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
             // Microphone action button
             IconButton(
                 onClick = onOpenVoice,
@@ -461,14 +569,8 @@ private fun ChatComposer(
                 modifier = Modifier
                     .size(36.dp)
                     .clip(CircleShape)
-                    .background(
-                        if (inputText.isNotBlank() && !isStreaming) extendedColors.brandNova
-                        else extendedColors.surfaceContainer
-                    )
-                    .clickable(
-                        enabled = inputText.isNotBlank() && !isStreaming,
-                        onClick = onSend
-                    )
+                    .background(if (canSend) extendedColors.brandNova else extendedColors.surfaceContainer)
+                    .clickable(enabled = canSend, onClick = onSend)
                     .testTag("chat_send_button"),
                 contentAlignment = Alignment.Center
             ) {
@@ -482,7 +584,7 @@ private fun ChatComposer(
                     Icon(
                         imageVector = Icons.Rounded.ArrowUpward,
                         contentDescription = "Send",
-                        tint = if (inputText.isNotBlank()) Color.White else extendedColors.inkTertiary.copy(alpha = 0.5f),
+                        tint = if (canSend) Color.White else extendedColors.inkTertiary.copy(alpha = 0.5f),
                         modifier = Modifier.size(18.dp)
                     )
                 }

@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AttachFile
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.GraphicEq
@@ -176,6 +177,32 @@ fun ChatMessageItem(
                             durationSec = message.audioDurationSec ?: 3.0f,
                             isUser = isUser
                         )
+                        Spacer(modifier = Modifier.height(6.dp))
+                    }
+
+                    // Attachment badge -- the file itself already left the
+                    // device with the request; this is display only.
+                    if (message.attachmentFilename != null) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(extendedColors.brandNovaSoft)
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.AttachFile,
+                                contentDescription = null,
+                                tint = extendedColors.brandNova,
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Text(
+                                text = message.attachmentFilename,
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                                color = extendedColors.brandNova
+                            )
+                        }
                         Spacer(modifier = Modifier.height(6.dp))
                     }
 
