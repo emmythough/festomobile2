@@ -9,8 +9,12 @@ itself in two places and gives you a full, prioritized punch list.
 
 ## Build order (read the detail sections before starting any of these)
 
-1. **Model picker is decorative — resolve it.** It presents a choice
-   that does nothing. Needs an owner decision first.
+Nothing here is blocked. Every endpoint referenced is live and
+externally reachable, and the owner is not making further decisions —
+build straight through this list.
+
+1. **Model picker** — backend is done and deployed; do the client half.
+   Fixes a control that does nothing *and* a fake cost figure.
 2. **Cramped-text sweep** — one instance fixed, find the rest.
 3. **Memory browser** (§A) — real live endpoint, biggest capability win.
 4. **Floating voice capsule** (§B) — pure client-side, biggest feel win.
@@ -19,7 +23,8 @@ itself in two places and gives you a full, prioritized punch list.
 7. **Remaining 5 animations** — the polish pass.
 8. **Live work panel** (§C), settings screen, message actions,
    swipe-to-delete.
-9. **Voice → v4** (§E) — blocked on a firewall change.
+9. **Voice → v4** (§E) — port is open; read the real request shapes from
+   the backend source before writing client code.
 
 ## What's real right now (don't rebuild these)
 
@@ -65,15 +70,18 @@ The backend is much larger than this app uses. Six v4 services run on
 | 8092 | v4 voice gateway | `/api/v4/voice/health`, `/voice/message`, `/voice/speak` | **no — unused** |
 | 8093 | v4 introspection API | `/api/v4/introspection/health`, `/workflows`, `/workflows/{id}/cancel`, `/memory`, `/memory/forget` | **no — unused** |
 
+Port 8091 also gained `GET /api/v4/models` and an optional `model` field
+on `/api/v4/message` — see the model-picker section below.
+
 Two more (diagnostics, webhooks) exist and are not for this app.
 
-**BLOCKER before building against 8092/8093:** those ports are listening
-but **firewalled off**. Only 8090 and 8091 are open at both layers (host
-UFW *and* the IONOS cloud-panel firewall — it's two separate firewalls,
-opening one is not enough). The owner has to open each new port in both
-places before any client work against it can be tested. Ask before
-assuming it's done; a closed port fails as a connection timeout that
-looks exactly like a bug in your code.
+**Ports 8090–8093 are all open and externally reachable** — verified
+2026-08-29 with a real request from outside the network; both
+`/api/v4/voice/health` and `/api/v4/introspection/health` return
+`{"status": "ok"}`. Nothing is firewall-blocked. (For future reference,
+this host has *two* firewall layers — host UFW and the IONOS cloud-panel
+firewall — and a port must be open in both; a port open in only one
+fails as a connection timeout that looks exactly like a client bug.)
 
 **Tokens:** every gateway has its own separate bearer token, stored in
 `/home/assistant/secrets/wendy_v4_*.env` on the server. They are NOT
@@ -82,25 +90,94 @@ which is exactly the bug that shipped in this app earlier today. Ask the
 owner for the specific token for whatever port you're integrating; do not
 guess and do not reuse `API_TOKEN`.
 
-## Highest-priority bug: the model picker is decorative
+## Highest-priority task: wire up the model picker (backend is DONE)
 
-`ModelPickerSheet` and the `ModelBadgeChip` in the top bar let a user
-pick between models. **On v4, this does nothing.** Verified in the
-backend source: `/api/v4/message` reads only `body.get("message")` and
-ignores everything else in the payload; the core then hardcodes
-`config.MODEL_ROSTER["voice"]` for its model call. The chip showing
-"Gemini 2.5 Flash" is not reporting a real setting.
+**The problem.** `ModelPickerSheet` and `ModelBadgeChip` present a model
+choice that does nothing. The app's six models
+(`google/gemini-2.5-flash`, `anthropic/claude-sonnet-4.5`,
+`openai/gpt-5.1`, …) are **invented mock data in `MockData.kt`** — the
+backend has never had any concept of those ids. Worse, the fiction
+propagates into numbers presented as fact:
+`FestoAppState.kt` stamps each reply with `model = selectedModel.id`
+(so the label under every message names your chip, not what answered)
+and computes cost from `selectedModel.inputPricePerM` — pricing for a
+model that wasn't used, multiplied by length-based token *guesses*.
+The "Usage & Spend" figure in the drawer is built from both.
 
-This is a UI that states something untrue, which is worse than a missing
-feature. Two acceptable fixes — **ask the owner which one before
-building**, since one needs backend work and the other doesn't:
-- **Client-only (no backend change):** stop presenting model choice as
-  user-controllable. Show the model as a read-only indicator of what
-  the backend actually used, or remove the chip.
-- **Full fix (needs backend):** add an optional `model` field to
-  `/api/v4/message` and thread it through the core. That's a backend
-  task in the `Wendy-Prototype` repo, not this one — flag it, don't
-  attempt it from here.
+**The backend half is already built, deployed, and live-verified** (as of
+2026-08-29). Your job is the client half only. Do not modify the
+backend; do not invent model ids ever again.
+
+### The real contract
+
+`GET /api/v4/models` (port 8091, same token as `/message`). Live response:
+
+```json
+{"models": [
+  {"id": "reflex", "label": "Fast",
+   "model_id": "openrouter/google/gemini-3.7-flash",
+   "input_cost_per_mtok": 0.075, "output_cost_per_mtok": 0.3,
+   "is_default": false},
+  {"id": "voice", "label": "Balanced",
+   "model_id": "openrouter/google/gemini-3.7-flash",
+   "input_cost_per_mtok": 0.375, "output_cost_per_mtok": 1.875,
+   "is_default": true},
+  {"id": "deep", "label": "Deep reasoning",
+   "model_id": "openrouter/z-ai/glm-5.2",
+   "input_cost_per_mtok": 0.447, "output_cost_per_mtok": 3.31,
+   "is_default": false}
+]}
+```
+
+There are **three** real options, not six. Show `label` to the user;
+send `id`.
+
+`POST /api/v4/message` now accepts an optional `model`:
+
+```json
+{"message": "...", "model": "deep"}
+```
+
+Omitted → backend default (the one with `is_default: true`). An
+unrecognised value returns **400** with
+`{"error":"unknown model","allowed":["reflex","voice","deep"]}` — handle
+that rather than treating it as a network failure.
+
+The final reply event now carries **real** usage:
+
+```json
+{"speech": "pong", "blocks": [],
+ "usage": {"tier": "deep", "model_id": "z-ai/glm-5.2",
+           "prompt_tokens": 19, "completion_tokens": 123,
+           "cost_usd": 0.0002839}}
+```
+
+`usage` is **absent** when no model call happened (an instant answer) or
+when the call failed. Absent means *unknown* — show nothing or a dash.
+**Never fall back to a local estimate**; that's the bug being fixed.
+
+### What to change in this app
+
+1. **Delete the six mock models** from `MockData.kt` and fetch the real
+   list from `GET /api/v4/models` on startup. Cache it in
+   `FestoAppState`. If the fetch fails, hide the picker rather than
+   falling back to a hardcoded list.
+2. **Send the selection.** `WendyApi.sendMessage(message)` must take the
+   selected model id and include it in the POST body. Wire
+   `appState.selectedModel` through the call at
+   `FestoAppState.kt:304`.
+3. **Parse `usage` off the final reply** in `WendyApi.kt` (add it to
+   `WendyEvent.Final`, or a parallel field) and store it on the
+   `Message`.
+4. **Label and price from `usage`, not from `selectedModel`.** Replace
+   `model = selectedModel.id` (`FestoAppState.kt:292`) with the
+   `model_id` the server reported, and replace the local cost
+   calculation (`FestoAppState.kt:330`) with the server's `cost_usd`.
+   Delete the length-based token estimates — real counts now come back.
+5. **Usage & Spend** in the drawer should sum real `cost_usd` values.
+   Where a turn has no `usage`, exclude it and don't silently treat it
+   as zero — if any turn is unpriced, the total is a lower bound, so
+   label it accordingly.
 
 ## Two confirmed bugs, fix these first
 
@@ -238,7 +315,7 @@ cancel button, is honest and genuinely useful.
 long-press actions. Near-zero effort; its complete absence today is one
 of the more noticeable "budget app" tells.
 
-### E. Move voice to v4 (only after 8092 is opened)
+### E. Move voice to v4
 
 Voice currently runs through Gen 1 on 8090 — a different brain and
 memory from the chat, which now runs on v4. That split means spoken
@@ -247,7 +324,8 @@ turns may not share context with typed ones. v4's voice gateway
 correct destination. **Read the real request/response shapes from the
 backend source before writing any client code** — an earlier bug in
 this exact area came from assuming a request shape instead of checking.
-Do not start until the port is confirmed open and you have its token.
+The port is open; you still need its own token (`wendy_v4_voice.env`),
+which is not the same as the 8091 one.
 
 ## Explicitly NOT backed — do not build these
 
@@ -261,9 +339,13 @@ any of them produces a UI that renders nothing or lies about capability:
 - **Per-message memory attribution** ("this reply used 2 memories"). The
   memory *browser* is real (section A); attribution is not. Nothing on
   the reply event says which facts fed it.
-- **Multi-model compare / side-by-side / cross-model branching.**
-  Requires model selection, which does not exist (see the model-picker
-  section above).
+- **Multi-model compare / side-by-side.** No longer impossible — model
+  selection now exists — but do **not** build it until the model picker
+  itself is wired up and shipped. Re-running one prompt across tiers is
+  a straightforward extension after that (post twice with different
+  `model` values), so treat it as a later enhancement, not a first move.
+  **Cross-model conversation *branching* remains unsupported** — see the
+  branching entry below.
 - **Full-duplex / continuous streaming audio.** Both voice gateways are
   request/response HTTP. There is no WebSocket anywhere in v4, and the
   reply path is a polled in-memory queue.
@@ -303,9 +385,9 @@ priority but above pure animation polish:
 - **A real Settings screen.** Doesn't exist as a dedicated surface right
   now — scattered across the drawer's memory/usage sheets. Add one,
   reachable from the drawer, holding at minimum the light/dark/system
-  toggle described above. Do **not** put a "default model" preference in
-  it unless the model-picker backend gap is fixed first — that would
-  add a second control that silently does nothing.
+  toggle described above. A "default model" preference is fine here once
+  the model picker is wired up — persist the chosen tier id and send it
+  on every turn.
 - **Swipe-to-delete on conversations**, not click-to-select-then-tap-
   trash (`ConversationDrawerItem` currently only shows its delete icon
   when already selected — two taps for what should be one swipe).
