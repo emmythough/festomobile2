@@ -148,18 +148,33 @@ fun ModelPickerSheet(
             Spacer(modifier = Modifier.height(14.dp))
 
             // Models List
-            LazyColumn(
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                items(appState.availableModels) { model ->
-                    ModelOptionCard(
-                        model = model,
-                        isSelected = model.id == appState.selectedModel.id,
-                        onSelect = {
-                            appState.selectModel(model)
-                            onDismiss()
-                        }
+            if (appState.availableModels.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 24.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "Loading models from server...",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = extendedColors.inkTertiary
                     )
+                }
+            } else {
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    items(appState.availableModels) { model ->
+                        ModelOptionCard(
+                            model = model,
+                            isSelected = model.id == appState.selectedModel.id,
+                            onSelect = {
+                                appState.selectModel(model)
+                                onDismiss()
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -175,9 +190,8 @@ private fun ModelOptionCard(
     val extendedColors = FestoTheme.colors
     val tierColor = when (model.tier) {
         CostTier.FAST -> extendedColors.accentGreen
-        CostTier.ECONOMY -> extendedColors.accentBlue
-        CostTier.STANDARD -> extendedColors.accentAmber
-        CostTier.PREMIUM -> extendedColors.accentPurple
+        CostTier.BALANCED -> extendedColors.accentAmber
+        CostTier.DEEP -> extendedColors.accentPurple
     }
 
     Box(
@@ -228,24 +242,6 @@ private fun ModelOptionCard(
                         ),
                         color = MaterialTheme.colorScheme.onSurface
                     )
-
-                    if (model.tag != null) {
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(extendedColors.borderHairline)
-                                .padding(horizontal = 5.dp, vertical = 1.dp)
-                        ) {
-                            Text(
-                                text = model.tag,
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    fontSize = 9.5.sp,
-                                    fontWeight = FontWeight.Medium
-                                ),
-                                color = extendedColors.inkTertiary
-                            )
-                        }
-                    }
                 }
 
                 // Check indicator
@@ -296,7 +292,7 @@ private fun ModelOptionCard(
                 )
 
                 Text(
-                    text = "In: $${String.format(Locale.US, "%.3f", model.inputPricePerM)} / Out: $${String.format(Locale.US, "%.2f", model.outputPricePerM)} /Mtok",
+                    text = "In: $${String.format(Locale.US, "%.3f", model.inputCostPerMtok)} / Out: $${String.format(Locale.US, "%.3f", model.outputCostPerMtok)} /Mtok",
                     style = MaterialTheme.typography.labelSmall.copy(
                         fontSize = 10.5.sp,
                         fontWeight = FontWeight.Medium

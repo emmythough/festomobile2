@@ -41,9 +41,8 @@ fun ModelBadgeChip(
     val extendedColors = FestoTheme.colors
     val tierColor = when (model.tier) {
         CostTier.FAST -> extendedColors.accentGreen
-        CostTier.ECONOMY -> extendedColors.accentBlue
-        CostTier.STANDARD -> extendedColors.accentAmber
-        CostTier.PREMIUM -> extendedColors.accentPurple
+        CostTier.BALANCED -> extendedColors.accentAmber
+        CostTier.DEEP -> extendedColors.accentPurple
     }
 
     Row(

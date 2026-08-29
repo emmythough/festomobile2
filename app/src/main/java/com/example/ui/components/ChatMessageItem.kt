@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Mic
@@ -42,6 +43,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -57,7 +62,10 @@ import androidx.compose.ui.unit.sp
 import com.example.data.Message
 import com.example.data.Modality
 import com.example.data.Role
+import com.example.ui.components.markdown.RichMessageRenderer
 import com.example.ui.theme.FestoTheme
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -71,25 +79,27 @@ fun ChatMessageItem(
     val isUser = message.role == Role.USER
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
+    val scope = rememberCoroutineScope()
+    var isMessageCopied by remember { mutableStateOf(false) }
     val timeFormatted = rememberTimeFormat(message.timestamp)
 
     Row(
         modifier = modifier
             .fillMaxWidth()
             .testTag(if (isUser) "user_message_item" else "assistant_message_item")
-            .padding(horizontal = 16.dp, vertical = 6.dp),
+            .padding(horizontal = 16.dp, vertical = if (isUser) 6.dp else 10.dp),
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
         verticalAlignment = Alignment.Top
     ) {
         if (!isUser) {
             NovaAvatar(
                 size = 28.dp,
-                modifier = Modifier.padding(top = 4.dp, end = 10.dp)
+                modifier = Modifier.padding(top = 2.dp, end = 12.dp)
             )
         }
 
         Column(
-            modifier = Modifier.widthIn(max = 320.dp),
+            modifier = if (isUser) Modifier.widthIn(max = 320.dp) else Modifier.fillMaxWidth().weight(1f, fill = false),
             horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
         ) {
             // Header for assistant (Model label)
@@ -97,13 +107,13 @@ fun ChatMessageItem(
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    modifier = Modifier.padding(bottom = 4.dp, start = 2.dp)
+                    modifier = Modifier.padding(bottom = 4.dp, start = 1.dp)
                 ) {
                     Text(
                         text = message.model.substringAfter("/"),
                         style = MaterialTheme.typography.labelSmall.copy(
                             fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium
+                            fontWeight = FontWeight.SemiBold
                         ),
                         color = extendedColors.brandNova
                     )
@@ -127,44 +137,37 @@ fun ChatMessageItem(
                 }
             }
 
-            // Message Bubble Card
+            // Message Container:
+            // - User messages: bubble card with background fill, border, and rounded corners
+            // - Assistant messages (§R1): no bubble fill, no border, full content width directly on canvas
             Box(
-                modifier = Modifier
-                    .clip(
-                        if (isUser) RoundedCornerShape(
-                            topStart = 18.dp,
-                            topEnd = 18.dp,
-                            bottomStart = 18.dp,
-                            bottomEnd = 4.dp
+                modifier = if (isUser) {
+                    Modifier
+                        .clip(
+                            RoundedCornerShape(
+                                topStart = 18.dp,
+                                topEnd = 18.dp,
+                                bottomStart = 18.dp,
+                                bottomEnd = 4.dp
+                            )
                         )
-                        else RoundedCornerShape(
-                            topStart = 4.dp,
-                            topEnd = 18.dp,
-                            bottomStart = 18.dp,
-                            bottomEnd = 18.dp
+                        .background(extendedColors.surfaceContainer)
+                        .border(
+                            1.dp,
+                            extendedColors.borderMedium,
+                            RoundedCornerShape(
+                                topStart = 18.dp,
+                                topEnd = 18.dp,
+                                bottomStart = 18.dp,
+                                bottomEnd = 4.dp
+                            )
                         )
-                    )
-                    .background(
-                        if (isUser) extendedColors.surfaceContainer
-                        else extendedColors.surfaceSubtle
-                    )
-                    .border(
-                        1.dp,
-                        if (isUser) extendedColors.borderMedium else extendedColors.borderHairline,
-                        if (isUser) RoundedCornerShape(
-                            topStart = 18.dp,
-                            topEnd = 18.dp,
-                            bottomStart = 18.dp,
-                            bottomEnd = 4.dp
-                        )
-                        else RoundedCornerShape(
-                            topStart = 4.dp,
-                            topEnd = 18.dp,
-                            bottomStart = 18.dp,
-                            bottomEnd = 18.dp
-                        )
-                    )
-                    .padding(horizontal = 14.dp, vertical = 10.dp)
+                        .padding(horizontal = 14.dp, vertical = 10.dp)
+                } else {
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 2.dp)
+                }
             ) {
                 Column {
                     // Voice player indicator if voice modality
@@ -178,9 +181,7 @@ fun ChatMessageItem(
 
                     // Content rendering. While streaming, wrap each growth in
                     // AnimatedContent so v4's throttled ~1.5s edits crossfade
-                    // instead of snapping the whole bubble to new text -- a
-                    // static (already-complete) message renders directly,
-                    // no animation overhead once the turn is done.
+                    // instead of snapping the whole bubble to new text.
                     if (message.content.isNotBlank()) {
                         if (message.isStreaming) {
                             AnimatedContent(
@@ -192,10 +193,32 @@ fun ChatMessageItem(
                                 },
                                 label = "streaming_content"
                             ) { animatedContent ->
-                                FormattedMessageContent(content = animatedContent, isUser = isUser)
+                                if (isUser) {
+                                    Text(
+                                        text = animatedContent,
+                                        style = MaterialTheme.typography.bodyMedium.copy(
+                                            lineHeight = 21.sp,
+                                            fontSize = 14.5.sp
+                                        ),
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                } else {
+                                    RichMessageRenderer(content = animatedContent)
+                                }
                             }
                         } else {
-                            FormattedMessageContent(content = message.content, isUser = isUser)
+                            if (isUser) {
+                                Text(
+                                    text = message.content,
+                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                        lineHeight = 21.sp,
+                                        fontSize = 14.5.sp
+                                    ),
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            } else {
+                                RichMessageRenderer(content = message.content)
+                            }
                         }
                     } else if (message.isStreaming) {
                         StreamingDotsIndicator()
@@ -203,15 +226,15 @@ fun ChatMessageItem(
 
                     // Streaming blinking cursor if active
                     if (message.isStreaming && message.content.isNotBlank()) {
-                        Spacer(modifier = Modifier.height(4.dp))
+                        Spacer(modifier = Modifier.height(6.dp))
                         StreamingCursor()
                     }
                 }
             }
 
-            // Footer metadata: timestamp & usage info
+            // Footer metadata: timestamp, telemetry & copy action
             Row(
-                modifier = Modifier.padding(top = 4.dp, start = 4.dp, end = 4.dp),
+                modifier = Modifier.padding(top = 4.dp, start = 2.dp, end = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
@@ -234,17 +257,44 @@ fun ChatMessageItem(
                 }
 
                 if (!isUser && message.content.isNotBlank() && !message.isStreaming) {
-                    Icon(
-                        imageVector = Icons.Rounded.ContentCopy,
-                        contentDescription = "Copy message",
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(3.dp),
                         modifier = Modifier
-                            .size(13.dp)
+                            .clip(RoundedCornerShape(4.dp))
                             .clickable {
                                 clipboardManager.setText(AnnotatedString(message.content))
                                 Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
-                            },
-                        tint = extendedColors.inkTertiary
-                    )
+                                isMessageCopied = true
+                                scope.launch {
+                                    delay(800)
+                                    isMessageCopied = false
+                                }
+                            }
+                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                    ) {
+                        AnimatedContent(
+                            targetState = isMessageCopied,
+                            transitionSpec = { fadeIn() togetherWith fadeOut() },
+                            label = "message_copy_state"
+                        ) { copied ->
+                            if (copied) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Check,
+                                    contentDescription = "Copied",
+                                    tint = extendedColors.accentGreen,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Rounded.ContentCopy,
+                                    contentDescription = "Copy message",
+                                    tint = extendedColors.inkTertiary,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -278,63 +328,6 @@ private fun VoiceMessageHeader(
                 fontSize = 11.sp
             ),
             color = extendedColors.brandNova
-        )
-    }
-}
-
-@Composable
-private fun FormattedMessageContent(
-    content: String,
-    isUser: Boolean
-) {
-    val extendedColors = FestoTheme.colors
-
-    // Check for code block segments
-    if (content.contains("```")) {
-        val parts = content.split("```")
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            parts.forEachIndexed { index, part ->
-                if (index % 2 == 1) {
-                    // Code block
-                    val codeContent = part.trim()
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(extendedColors.surfaceDialog)
-                            .border(1.dp, extendedColors.borderHairline, RoundedCornerShape(8.dp))
-                            .padding(10.dp)
-                    ) {
-                        Text(
-                            text = codeContent,
-                            style = MaterialTheme.typography.bodySmall.copy(
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 12.sp,
-                                lineHeight = 17.sp
-                            ),
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-                } else if (part.isNotBlank()) {
-                    Text(
-                        text = part.trim(),
-                        style = MaterialTheme.typography.bodyMedium.copy(
-                            lineHeight = 21.sp,
-                            fontSize = 14.5.sp
-                        ),
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-            }
-        }
-    } else {
-        Text(
-            text = content,
-            style = MaterialTheme.typography.bodyMedium.copy(
-                lineHeight = 21.sp,
-                fontSize = 14.5.sp
-            ),
-            color = MaterialTheme.colorScheme.onSurface
         )
     }
 }

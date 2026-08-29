@@ -29,10 +29,29 @@ class FestoAppState(
 ) {
     companion object {
         private const val MAIN_CONVERSATION_ID = "wendy-main"
+        private val FALLBACK_MODEL = ModelOption(
+            id = "voice",
+            label = "Balanced",
+            modelId = "openrouter/google/gemini-3.7-flash",
+            inputCostPerMtok = 0.375,
+            outputCostPerMtok = 1.875,
+            isDefault = true
+        )
     }
 
     init {
+        coroutineScope.launch { loadRealModels() }
         coroutineScope.launch { loadRealHistory() }
+    }
+
+    private suspend fun loadRealModels() {
+        val models = WendyApi.fetchModels()
+        if (models.isNotEmpty()) {
+            availableModels.clear()
+            availableModels.addAll(models)
+            val default = models.firstOrNull { it.isDefault } ?: models.first()
+            selectedModel = default
+        }
     }
 
     private suspend fun loadRealHistory() {
@@ -72,8 +91,8 @@ class FestoAppState(
     var authError by mutableStateOf<String?>(null)
 
     // Models & Conversations
-    val availableModels = mutableStateListOf<ModelOption>().apply { addAll(MockData.models) }
-    var selectedModel by mutableStateOf(MockData.getDefaultModel())
+    val availableModels = mutableStateListOf<ModelOption>()
+    var selectedModel by mutableStateOf(FALLBACK_MODEL)
         private set
 
     // Real Wendy has one continuous conversation shared with Telegram, not
@@ -81,7 +100,7 @@ class FestoAppState(
     // here, seeded empty and filled in from GET /api/history below rather
     // than from MockData.
     val conversations = mutableStateListOf(
-        Conversation(id = MAIN_CONVERSATION_ID, title = "Wendy", modelId = MockData.getDefaultModel().id)
+        Conversation(id = MAIN_CONVERSATION_ID, title = "Wendy", modelId = FALLBACK_MODEL.id)
     )
     var activeConversationId by mutableStateOf<String?>(MAIN_CONVERSATION_ID)
         private set
@@ -179,7 +198,7 @@ class FestoAppState(
         isDrawerOpen = false
         val conv = conversations.find { it.id == id }
         if (conv != null) {
-            selectedModel = MockData.findModel(conv.modelId)
+            selectedModel = availableModels.find { it.id == conv.modelId } ?: selectedModel
         }
     }
 
@@ -283,13 +302,14 @@ class FestoAppState(
         isStreamingResponse = true
 
         val assistantMsgId = "msg-${UUID.randomUUID().toString().take(8)}"
+        val currentSelectedModel = selectedModel
         val placeholderMsg = Message(
             id = assistantMsgId,
             conversationId = convId,
             role = Role.ASSISTANT,
             content = "",
             modality = Modality.TEXT,
-            model = selectedModel.id,
+            model = currentSelectedModel.id,
             isStreaming = true,
             timestamp = System.currentTimeMillis()
         )
@@ -299,9 +319,10 @@ class FestoAppState(
         streamingJob = coroutineScope.launch {
             var fullResponse = ""
             var errorMessage: String? = null
+            var finalUsage: ServerUsage? = null
             val startedAt = System.currentTimeMillis()
 
-            WendyApi.sendMessage(userPrompt).collect { event ->
+            WendyApi.sendMessage(userPrompt, currentSelectedModel.id).collect { event ->
                 when (event) {
                     is WendyEvent.Delta -> {
                         fullResponse = event.text
@@ -313,7 +334,10 @@ class FestoAppState(
                             )
                         }
                     }
-                    is WendyEvent.Final -> fullResponse = event.text
+                    is WendyEvent.Final -> {
+                        fullResponse = event.text
+                        finalUsage = event.usage
+                    }
                     is WendyEvent.Error -> errorMessage = event.message
                 }
             }
@@ -322,32 +346,26 @@ class FestoAppState(
                 fullResponse = "Couldn't reach Wendy: $errorMessage"
             }
 
-            // Real token counts aren't returned by the API yet -- these are
-            // the same length-based estimates the mock used, kept only for
-            // the usage/cost UI until the server reports real usage.
-            val inTokens = (userPrompt.length / 3.8).toInt().coerceAtLeast(15)
-            val outTokens = (fullResponse.length / 3.6).toInt().coerceAtLeast(25)
-            val cost = (inTokens * selectedModel.inputPricePerM + outTokens * selectedModel.outputPricePerM) / 1_000_000.0
-
             val msgIndex = convMessages.indexOfFirst { it.id == assistantMsgId }
             if (msgIndex != -1) {
                 convMessages[msgIndex] = convMessages[msgIndex].copy(
                     content = fullResponse,
                     isStreaming = false,
-                    inputTokens = inTokens,
-                    outputTokens = outTokens,
-                    costUsd = cost
+                    model = finalUsage?.modelId ?: currentSelectedModel.id,
+                    inputTokens = finalUsage?.promptTokens,
+                    outputTokens = finalUsage?.completionTokens,
+                    costUsd = finalUsage?.costUsd
                 )
             }
 
-            if (errorMessage == null) {
+            if (errorMessage == null && finalUsage?.costUsd != null) {
                 val event = UsageEvent(
                     id = System.currentTimeMillis(),
-                    model = selectedModel.id,
+                    model = finalUsage?.modelId ?: currentSelectedModel.id,
                     kind = "chat",
-                    inputTokens = inTokens,
-                    outputTokens = outTokens,
-                    costUsd = cost,
+                    inputTokens = finalUsage?.promptTokens ?: 0,
+                    outputTokens = finalUsage?.completionTokens ?: 0,
+                    costUsd = finalUsage?.costUsd ?: 0.0,
                     durationMs = (System.currentTimeMillis() - startedAt).toInt(),
                     timestamp = System.currentTimeMillis()
                 )
@@ -469,7 +487,7 @@ class FestoAppState(
 
             // 3) Run through the SAME reply path as text (real Wendy brain).
             voiceState = VoiceState.THINKING
-            val replyText = runVoiceReply(convId, recognizedPrompt)
+            val (replyText, serverUsage) = runVoiceReply(convId, recognizedPrompt)
             if (voiceState != VoiceState.THINKING) return@launch // cancelled
 
             if (replyText == null || replyText.isBlank()) {
@@ -487,34 +505,32 @@ class FestoAppState(
                 return@launch
             }
 
-            val inTokens = (recognizedPrompt.length / 3.8).toInt().coerceAtLeast(15)
-            val outTokens = (replyText.length / 3.6).toInt().coerceAtLeast(20)
-            val cost = (inTokens * selectedModel.inputPricePerM + outTokens * selectedModel.outputPricePerM) / 1_000_000.0
-
             val assistantMsg = Message(
                 id = "vmsg-asst-${UUID.randomUUID().toString().take(8)}",
                 conversationId = convId,
                 role = Role.ASSISTANT,
                 content = replyText,
                 modality = Modality.VOICE,
-                model = selectedModel.id,
+                model = serverUsage?.modelId ?: selectedModel.id,
                 audioDurationSec = (replyText.split(" ").size * 0.22f).coerceAtLeast(2.0f),
-                inputTokens = inTokens,
-                outputTokens = outTokens,
-                costUsd = cost,
+                inputTokens = serverUsage?.promptTokens,
+                outputTokens = serverUsage?.completionTokens,
+                costUsd = serverUsage?.costUsd,
                 timestamp = System.currentTimeMillis()
             )
             messagesMap[convId]?.add(assistantMsg)
-            usageEvents.add(0, UsageEvent(
-                id = System.currentTimeMillis(),
-                model = selectedModel.id,
-                kind = "voice",
-                inputTokens = inTokens,
-                outputTokens = outTokens,
-                costUsd = cost,
-                durationMs = (replyText.split(" ").size * 180),
-                timestamp = System.currentTimeMillis()
-            ))
+            if (serverUsage?.costUsd != null) {
+                usageEvents.add(0, UsageEvent(
+                    id = System.currentTimeMillis(),
+                    model = serverUsage.modelId ?: selectedModel.id,
+                    kind = "voice",
+                    inputTokens = serverUsage.promptTokens ?: 0,
+                    outputTokens = serverUsage.completionTokens ?: 0,
+                    costUsd = serverUsage.costUsd,
+                    durationMs = (replyText.split(" ").size * 180),
+                    timestamp = System.currentTimeMillis()
+                ))
+            }
 
             // 5) Play the synthesized reply through the speaker.
             voiceLiveTranscript = ""
@@ -530,34 +546,39 @@ class FestoAppState(
 
     /**
      * Runs the transcribed prompt through the normal assistant reply path
-     * and returns the final text (or null if cancelled / failed). Keeps the
+     * and returns the final text and server usage (or null if cancelled / failed). Keeps the
      * voice reply identical to a typed message on the same conversation.
      */
-    private suspend fun runVoiceReply(convId: String, prompt: String): String? {
-        val messages = messagesMap[convId] ?: return null
+    private suspend fun runVoiceReply(convId: String, prompt: String): Pair<String?, ServerUsage?> {
+        val messages = messagesMap[convId] ?: return Pair(null, null)
         val assistantMsgId = "msg-${UUID.randomUUID().toString().take(8)}"
+        val currentSelectedModel = selectedModel
         val placeholder = Message(
             id = assistantMsgId,
             conversationId = convId,
             role = Role.ASSISTANT,
             content = "",
             modality = Modality.VOICE,
-            model = selectedModel.id,
+            model = currentSelectedModel.id,
             isStreaming = true,
             timestamp = System.currentTimeMillis()
         )
         messages.add(placeholder)
 
         var full = ""
+        var finalUsage: ServerUsage? = null
         try {
-            WendyApi.sendMessage(prompt).collect { event ->
+            WendyApi.sendMessage(prompt, currentSelectedModel.id).collect { event ->
                 when (event) {
                     is WendyEvent.Delta -> {
                         full = event.text
                         val idx = messages.indexOfFirst { it.id == assistantMsgId }
                         if (idx != -1) messages[idx] = messages[idx].copy(content = full)
                     }
-                    is WendyEvent.Final -> full = event.text
+                    is WendyEvent.Final -> {
+                        full = event.text
+                        finalUsage = event.usage
+                    }
                     is WendyEvent.Error -> {
                         val idx = messages.indexOfFirst { it.id == assistantMsgId }
                         if (idx != -1) messages[idx] = messages[idx].copy(content = "Couldn't reach Wendy: ${event.message}")
@@ -574,14 +595,18 @@ class FestoAppState(
             messages[idx] = messages[idx].copy(
                 content = full,
                 isStreaming = false,
-                isError = full.isBlank()
+                isError = full.isBlank(),
+                model = finalUsage?.modelId ?: currentSelectedModel.id,
+                inputTokens = finalUsage?.promptTokens,
+                outputTokens = finalUsage?.completionTokens,
+                costUsd = finalUsage?.costUsd
             )
         }
         // runVoiceReply appends the assistant message itself; the voice
         // pipeline adds a separate VOICE modality copy, so remove the text
         // placeholder to avoid duplication.
         messages.removeAll { it.id == assistantMsgId }
-        return if (full.isBlank()) null else full
+        return if (full.isBlank()) Pair(null, null) else Pair(full, finalUsage)
     }
 
     fun bargeInStopPlayback() {
