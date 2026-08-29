@@ -177,7 +177,10 @@ fun VoiceOverlay(
                 val captionText = when (voiceState) {
                     VoiceState.IDLE -> "Tap the microphone below to start talking"
                     VoiceState.RECORDING -> "Recording audio (${String.format("%.1fs", appState.voiceRecordingDurationSec / 10f)}) • Tap stop when finished"
-                    VoiceState.SENDING -> "Uploading 24kHz audio stream to OpenRouter"
+                    // Was "24kHz ... to OpenRouter" -- the real recording is
+                    // 16kHz AAC/M4A to this app's own server proxy, which then
+                    // relays to OpenRouter; corrected to match what actually happens.
+                    VoiceState.SENDING -> "Uploading recorded audio for transcription"
                     VoiceState.THINKING -> "Synthesizing response with ${appState.selectedModel.name}"
                     VoiceState.SPEAKING -> "Tap anywhere to interrupt or stop playback"
                 }

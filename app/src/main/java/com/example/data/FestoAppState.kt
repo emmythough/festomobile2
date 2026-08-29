@@ -44,14 +44,26 @@ class FestoAppState(
         coroutineScope.launch { loadRealHistory() }
     }
 
-    private suspend fun loadRealModels() {
+    /** Real network state for the model picker's empty view -- without
+     * this, a failed fetch left availableModels empty forever and the
+     * picker showed "Loading..." permanently with no way to retry. */
+    var modelsLoadFailed by mutableStateOf(false)
+
+    suspend fun loadRealModels() {
+        modelsLoadFailed = false
         val models = WendyApi.fetchModels()
         if (models.isNotEmpty()) {
             availableModels.clear()
             availableModels.addAll(models)
             val default = models.firstOrNull { it.isDefault } ?: models.first()
             selectedModel = default
+        } else if (availableModels.isEmpty()) {
+            modelsLoadFailed = true
         }
+    }
+
+    fun retryLoadModels() {
+        coroutineScope.launch { loadRealModels() }
     }
 
     private suspend fun loadRealHistory() {
@@ -611,6 +623,7 @@ class FestoAppState(
 
         var full = ""
         var finalUsage: ServerUsage? = null
+        var failureReason: String? = null
         try {
             WendyApi.sendMessage(prompt, currentSelectedModel.id).collect { event ->
                 when (event) {
@@ -624,14 +637,24 @@ class FestoAppState(
                         finalUsage = event.usage
                     }
                     is WendyEvent.Error -> {
-                        val idx = messages.indexOfFirst { it.id == assistantMsgId }
-                        if (idx != -1) messages[idx] = messages[idx].copy(content = "Couldn't reach Wendy: ${event.message}")
+                        // This text-mode placeholder gets removed below
+                        // regardless of outcome (the voice path shows its
+                        // own VOICE-modality message instead) -- writing
+                        // the error here and then deleting it was real
+                        // dead code. voiceLiveTranscript is the overlay's
+                        // only actual message surface; that's what the
+                        // caller needs, not this placeholder.
+                        failureReason = event.message
                         full = ""
                     }
                 }
             }
         } catch (e: Exception) {
+            failureReason = e.message ?: "unknown error"
             full = ""
+        }
+        if (full.isBlank()) {
+            voiceLiveTranscript = "Couldn't reach Wendy: ${failureReason ?: "no reply"}"
         }
 
         val idx = messages.indexOfFirst { it.id == assistantMsgId }

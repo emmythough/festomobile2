@@ -57,7 +57,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -201,6 +205,9 @@ fun ChatScreen(
                 },
                 onOpenVoice = openVoice,
                 onPickAttachment = { filename, bytes -> appState.setPendingAttachment(filename, bytes) },
+                onAttachmentReadFailed = { filename ->
+                    appState.attachmentError = "Couldn't read \"$filename\" -- try picking it again."
+                },
                 pendingAttachmentFilename = appState.pendingAttachment?.filename,
                 onClearAttachment = { appState.clearPendingAttachment() },
                 attachmentError = appState.attachmentError,
@@ -333,7 +340,7 @@ private fun EmptyChatStarter(
             StarterCard(
                 icon = Icons.Rounded.Speed,
                 title = "Model Cost & Latency Benchmark",
-                subtitle = "Compare Gemini 2.5 Flash, Sonnet 4.5 & GLM 5.3",
+                subtitle = "Compare Flash, Sonnet & Haiku",
                 onClick = { onSelectPrompt("Compare the pricing, context length, and latency tradeoffs among our available models.") }
             )
             StarterCard(
@@ -408,6 +415,7 @@ private fun ChatComposer(
     onSend: () -> Unit,
     onOpenVoice: () -> Unit,
     onPickAttachment: (filename: String, bytes: ByteArray) -> Unit,
+    onAttachmentReadFailed: (filename: String) -> Unit,
     pendingAttachmentFilename: String?,
     onClearAttachment: () -> Unit,
     attachmentError: String?,
@@ -416,6 +424,7 @@ private fun ChatComposer(
 ) {
     val extendedColors = FestoTheme.colors
     val context = LocalContext.current
+    val composerScope = rememberCoroutineScope()
     val canSend = (inputText.isNotBlank() || pendingAttachmentFilename != null) && !isStreaming
 
     // Storage Access Framework picker -- no runtime permission needed
@@ -426,21 +435,27 @@ private fun ChatComposer(
     ) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         val resolver = context.contentResolver
-        val name = resolver.query(uri, null, null, null, null)?.use { cursor ->
-            val idx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-            if (idx >= 0 && cursor.moveToFirst()) cursor.getString(idx) else null
-        } ?: uri.lastPathSegment ?: "attachment"
-        try {
-            val bytes = resolver.openInputStream(uri)?.use { it.readBytes() }
-            if (bytes != null) {
-                onPickAttachment(name, bytes)
+        // Reading the full byte stream must never run on the composition
+        // thread -- an unconstrained read up to the 12MB cap is a real ANR
+        // risk there. IO dispatcher, hop back automatically for the state
+        // write onPickAttachment does.
+        composerScope.launch(Dispatchers.IO) {
+            val name = resolver.query(uri, null, null, null, null)?.use { cursor ->
+                val idx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                if (idx >= 0 && cursor.moveToFirst()) cursor.getString(idx) else null
+            } ?: uri.lastPathSegment ?: "attachment"
+            try {
+                val bytes = resolver.openInputStream(uri)?.use { it.readBytes() }
+                withContext(Dispatchers.Main) {
+                    if (bytes != null) {
+                        onPickAttachment(name, bytes)
+                    } else {
+                        onAttachmentReadFailed(name)
+                    }
+                }
+            } catch (_: java.io.IOException) {
+                withContext(Dispatchers.Main) { onAttachmentReadFailed(name) }
             }
-        } catch (_: java.io.IOException) {
-            // Surfaced identically to an oversized file -- setPendingAttachment
-            // would show the real message; a read failure here has no bytes to
-            // hand it, so this stays a silent no-op rather than a misleading
-            // "too large" message. Real gap noted for the audit: a generic
-            // read-failure toast would be better than nothing.
         }
     }
 

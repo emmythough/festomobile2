@@ -149,17 +149,37 @@ fun ModelPickerSheet(
 
             // Models List
             if (appState.availableModels.isEmpty()) {
-                Box(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(vertical = 24.dp),
-                    contentAlignment = Alignment.Center
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
-                        text = "Loading models from server...",
+                        text = if (appState.modelsLoadFailed) {
+                            "Couldn't load models from the server."
+                        } else {
+                            "Loading models from server..."
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                         color = extendedColors.inkTertiary
                     )
+                    if (appState.modelsLoadFailed) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(extendedColors.brandNovaSoft)
+                                .clickable { appState.retryLoadModels() }
+                                .padding(horizontal = 16.dp, vertical = 8.dp)
+                        ) {
+                            Text(
+                                text = "Retry",
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                                color = extendedColors.brandNova
+                            )
+                        }
+                    }
                 }
             } else {
                 LazyColumn(

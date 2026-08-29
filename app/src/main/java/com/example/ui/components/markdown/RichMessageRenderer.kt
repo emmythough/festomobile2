@@ -21,7 +21,12 @@ fun parseMessageBlocks(raw: String): List<MessageBlock> {
     }
 
     val blocks = mutableListOf<MessageBlock>()
-    val fenceRegex = Regex("```([a-zA-Z0-9_-]*)\\s*\\n?([\\s\\S]*?)(?:```|\$)", RegexOption.MULTILINE)
+    // Streaming-safe "closing fence OR the real end of the text": deliberately
+    // \\z (true end of input), NOT MULTILINE's $ -- $ under MULTILINE matches
+    // before ANY line break, so an unclosed fence during streaming could
+    // close itself early at the next newline in the code body, not just when
+    // genuinely unterminated. \\z has no such ambiguity.
+    val fenceRegex = Regex("```([a-zA-Z0-9_-]*)\\s*\\n?([\\s\\S]*?)(?:```|\\z)")
     var lastIndex = 0
 
     val matches = fenceRegex.findAll(raw).toList()
