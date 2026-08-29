@@ -40,9 +40,11 @@ reverted:
   Showing `$0.000` reads as "free," which is worse than not showing a
   number — replaced with "Cost shown after reply."
 
-**Files changed:** `assistant_bridge/mobile_api.py`,
-`assistant_bridge/bridge.py` (backend, deployed to the VPS directly —
-not in this repo's git history, see §6), and
+**Files changed:** `assistant_bridge/{mobile_api,bridge,opencode_http}.py`
+(backend — deployed to the VPS directly, then, caught before this
+session ended, actually committed to `Wendy-Prototype`'s
+`claude/project-understanding-7ekhc0` branch at `a261d70`; it briefly
+existed live-but-uncommitted, see §8), and
 `app/src/main/java/com/example/data/{WendyApi,ModelOption,FestoAppState}.kt`
 + `ui/models/ModelPickerSheet.kt` (this repo, commit `f8fe7e1`).
 
@@ -78,14 +80,20 @@ Commit `72129d4`.
 
 ## 3. Mobile app: fixed, working, and shipped
 
-Three APKs sent to you tonight, each superseding the last:
+Six APKs sent to you tonight, each superseding the last — **the final
+one is the one to actually use going forward**, everything before it is
+superseded:
 1. First build after the message-rendering overhaul (Markwon/LaTeX/
    tables, assistant bubble removed, model picker wired to v4).
 2. After discovering and fixing the Telegram/app split (§1).
-3. After adding file attachments (§2) — **this is the one to actually
-   use going forward.**
+3. After adding file attachments (§2).
+4. After the independent audit's 6 bug fixes (§5) — including a real
+   ANR risk in build #3's own attachment feature.
+5. After the memory-sheet and auth-screen honesty fixes (§5).
+6. After deleting the confirmed-dead `RealVoiceEngine.kt` (§5) — the
+   last build sent.
 
-All three compiled with a full clean rebuild
+Every one compiled with a full clean rebuild
 (`./gradlew :app:compileDebugKotlin --rerun-tasks`), not an incremental
 build, before being sent.
 
@@ -149,18 +157,40 @@ the finished message directly from opencode rather than returning
 nothing. Verified live before and after (reproduced the empty reply,
 then confirmed `'pong'` came through).
 
-**Status as of the end of this session — genuinely incomplete, said
-plainly rather than glossed over:**
+**Status as of the end of this session — both landed, verified, and deployed:**
 
-- Two background engineers were dispatched for the blank-reply/recency
-  probes and the Telegram listener. The first attempt on both **hung
-  for 25+ minutes with zero file changes and near-frozen CPU** — a real
-  stall, not just a slow complex task (confirmed by comparison against
-  every other engineer tonight, all of which showed real CPU movement).
-  Killed and relaunched both fresh; **check `git log` in
-  `Wendy-Prototype`'s `v4/` and `mechanic/` dirs for whether the second
-  attempt actually landed** — I could not wait out a third full cycle
-  before this handover was written.
+The first attempt at both tasks **hung for 25+ minutes with zero file
+changes and near-frozen CPU** — a real stall, not just a slow complex
+task. Killed and relaunched both fresh; the second attempt on each
+completed cleanly.
+
+- **Blank-reply and reply-recency probes** — independently verified
+  (not just trusted from the engineer's report): read the real diff,
+  ran the real test suite myself (`44 passed`, only the same
+  pre-existing Windows/landlock failure everything else hits all
+  night), then deployed to the VPS with the same pattern as every other
+  backend change tonight (syntax-check, timestamped `.bak`, restart,
+  verify live). **Confirmed live on the real running service**:
+  `recent_reply_content -> ok | 0/5 recent replies blank`,
+  `reply_recency -> ok | newest assistant reply under 1h ago`. The
+  canary (`run_canary()`) now also fails on a completed-but-empty
+  reply, closing the exact gap tonight's real outage exposed.
+- **Mechanic Telegram listener** — also independently verified: read
+  the real diff (confirmed `listener.py` imports `config` and
+  `reporter` only — **no `executor` import anywhere**, so it is
+  structurally incapable of running remediation, not just told not to),
+  ran the real test suite myself (`63 passed`), deployed to the Hetzner
+  box, and **confirmed live in the real service logs**: `"listener
+  polling getUpdates (long poll 25s), allowed user 605546234"` — your
+  real Telegram id, correctly recognized, with real successful
+  `getUpdates`/`sendMessage` calls against Telegram's API.
+  **@FestoMechbot now genuinely answers `status`/`help` in Telegram.**
+  I could not send it a live test message myself (no Telegram client in
+  this environment) — that one real end-to-end tap is yours to do.
+  One nice catch from the engineer I hadn't asked for: the read offset
+  is persisted to disk, not just held in memory, so a crash between
+  handling and confirming a message can't cause it to be re-answered
+  after a restart.
 - **The full instrument panel (Redis, all 8 v4 services, endpoint
   reachability, OpenRouter credit balance, swap, load average) was
   never dispatched a second time** — deliberately deferred rather than
@@ -209,16 +239,37 @@ fixed, verified, and shipped** (commit `1297897`):
    three models — Gemini 2.5 Flash, Sonnet 4.5, GLM 5.3 — that don't
    exist in the real, live model list).
 
-**Not fixed tonight — real judgment calls, not oversights, see §6:**
-the auth screen always succeeds with pre-filled demo credentials
-(pure theater); the memory sheet shows three hardcoded fake facts as if
-they were real, distilled memory; the drawer presents multiple
-conversation threads when the backend has exactly one shared session.
-`RealVoiceEngine.kt` is confirmed **zero-reference dead code** — the
-on-device SpeechRecognizer/TTS engine from the earlier AI Studio
-divergence was never wired to anything. Delete it or wire it; leaving
-~240 unreferenced lines around is exactly the kind of thing that caused
-tonight's two-backend split in the first place.
+**Fixed after the audit landed, same session, each independently
+compiled and verified:**
+- **Memory sheet fabrication** — it was seeded with 3 entirely made-up
+  facts (a fictional voice protocol spec, a wrong description of the
+  server's real OS/database) shown under "N durable facts distilled
+  across threads." None of it ever touched Wendy. Removed the fake
+  seed data, relabeled honestly ("Personal notes, kept on this device
+  only"), and added a real empty state — every user now sees that on
+  first open instead of 3 fake entries.
+- **Auth screen theater** — `isAuthenticated` defaults true,
+  `submitAuth()` always succeeds after a fixed delay, pre-filled demo
+  credentials, any 6+ char password "creates an account." Chose the
+  lower-risk of the audit's two options (disclaimer vs. deletion, since
+  removing the screen changes app navigation and there's no device here
+  to verify the result) — added a plain-text line stating what actually
+  happens instead of implying a real check.
+- **`RealVoiceEngine.kt` deleted** — confirmed zero references anywhere
+  before deleting (re-grepped fresh, every hit was inside the file's
+  own log tags). Left in place, this was exactly the kind of parallel,
+  silently-diverging implementation that caused tonight's Telegram/
+  mobile backend split in the first place.
+
+**Deliberately NOT touched — a real design decision, not an
+oversight:** the drawer presents multiple conversation threads (new,
+delete, rename) when the backend has exactly one shared session with
+Telegram. Unlike the two fixes above, this isn't a label problem — the
+underlying operations genuinely don't do what they imply (delete
+doesn't touch server history; a relaunch resurrects it via
+`GET /api/history`). Needs an actual decision — collapse the drawer to
+one entry, or build real per-thread server support — not a quick patch,
+so left for you to choose with the full picture in front of you.
 
 A meaningful chunk of `AUDIT_REPORT.md` is genuinely reassuring, not
 just a bug list: every "does X show a real number or an estimate"
@@ -259,12 +310,11 @@ everywhere, no client-side estimation slipped back in.
    models available, that's a `_MODEL_MAP` addition in `bridge.py` on
    the VPS — say which real OpenRouter models and I'll wire them
    properly rather than inventing ids again.
-5. **Left both voice pipelines in place** (`VoiceAudioEngine.kt`,
-   server-side proxy; `RealVoiceEngine.kt`, on-device SpeechRecognizer/
-   TextToSpeech from the AI Studio sandbox) without merging or choosing
-   between them. Both exist; I have not verified whether both are
-   reachable from the same UI button (a real bug if so) — that question
-   is explicitly in the audit engineer's scope (§5).
+5. **Resolved, not left open**: the audit confirmed `RealVoiceEngine.kt`
+   (on-device SpeechRecognizer/TTS from the AI Studio sandbox) had zero
+   references anywhere — never reachable from any button, dead on
+   arrival. Deleted it (§5). `VoiceAudioEngine.kt` (the real, working
+   server-side proxy) is the only voice pipeline in the app now.
 
 ---
 
@@ -282,9 +332,18 @@ everywhere, no client-side estimation slipped back in.
 
 ## 8. If something looks wrong
 
-Every backend file I touched has a timestamped `.bak-<unix-time>` copy
-sitting right next to it on the VPS (`assistant_bridge/`) — a plain
-`cp` back is always available, no git needed. Every mobile-app commit
-tonight is a normal, revertable git commit on `main` with a message
-describing exactly what changed and why (`git log --oneline` in this
-repo). Nothing was force-pushed; nothing was squashed.
+Every backend file touched tonight (on both the IONOS VPS and the
+Hetzner Mechanic box) has a timestamped `.bak-<unix-time>` copy sitting
+right next to it — a plain `cp` back is always available, no git
+needed, on either machine.
+
+Every one of those same files is also now a normal, revertable git
+commit — nothing force-pushed, nothing squashed, everything with a
+message describing exactly what changed and why:
+- **This repo** (`festomobile2`), `main`: `f8fe7e1` through the final
+  commit — `git log --oneline` here has the full sequence.
+- **`Wendy-Prototype`**, branch `claude/project-understanding-7ekhc0`:
+  `732a4d7` (v4 model selection), `a261d70` (Gen 1 backend — mobile_api,
+  bridge, opencode_http; this one briefly existed live-on-the-VPS but
+  uncommitted, caught and fixed before this session ended), `4f15230`
+  (the new diagnostics probes + Mechanic listener).
