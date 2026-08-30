@@ -23,15 +23,27 @@ import java.util.Locale
 import java.util.TimeZone
 import java.util.concurrent.TimeUnit
 
-/** One live Hermes turn. Mirrors the shape of WendyEvent (full text-so-far
- * on Delta, one Final-or-Error per turn) so FestoAppState's streaming
- * plumbing treats both backends the same, plus two Hermes-only events:
+/** Server-reported token/cost usage for a completed turn -- read from
+ * the gateway's usage frames, not estimated. `tier` is the model tier
+ * the gateway may report; `modelId` is the real underlying model (e.g.
+ * "z-ai/glm-5.3-flash"). Absent on failures; never substitute a local
+ * estimate for a missing value. */
+data class ServerUsage(
+    val tier: String? = null,
+    val modelId: String? = null,
+    val promptTokens: Int? = null,
+    val completionTokens: Int? = null,
+    val costUsd: Double? = null
+)
+
+/** One live Hermes turn. Deltas carry the full text-so-far, and each
+ * turn ends with one Completed (or Error), plus two Hermes-only events:
  * ToolActivity (tool.* progress lines) and SessionRotated (the gateway
  * may rotate the session id on context compression -- run.completed's
  * session_id is authoritative and must be persisted). */
 sealed class HermesEvent {
     /** Full reply text so far, NOT an increment -- always replace the
-     * displayed bubble with this (same contract as WendyEvent.Delta). */
+     * displayed bubble with this. */
     data class Delta(val textSoFar: String) : HermesEvent()
 
     /** tool.started / tool.progress / tool.completed / tool.failed --
@@ -73,7 +85,7 @@ data class HermesSession(
 /** Result of GET /api/sessions. A sealed result instead of an empty list
  * because "gateway unreachable" (wrong URL/key -- the user is literally
  * editing those fields) must render differently in Settings from "no
- * sessions yet", same reasoning as OutboxDownload. */
+ * sessions yet". */
 sealed class HermesSessionsResult {
     data class Ready(val sessions: List<HermesSession>) : HermesSessionsResult()
     data class Failed(val message: String? = null) : HermesSessionsResult()
@@ -125,8 +137,7 @@ data class HermesImageAttachment(
  * small reader below (multiline data: lines joined with \n, comment and
  * unknown fields ignored) -- no SSE library dependency added.
  *
- * Security note: plaintext HTTP with a bearer key, same tradeoff already
- * accepted for the Gen 1 backend (see WendyApi.kt). Cleartext to the
+ * Security note: plaintext HTTP with a bearer key. Cleartext to the
  * default gateway IP is explicitly allowed in network_security_config.xml;
  * a user-entered http:// URL to any OTHER host will be blocked by
  * Android's cleartext policy until that host is allowlisted too. */
@@ -138,8 +149,7 @@ object HermesApi {
         .readTimeout(0, TimeUnit.SECONDS) // a streaming turn can legitimately run minutes (tool use)
         // 30s (was 10s): a multimodal turn's body carries a downscaled
         // photo as base64 (~33% larger than raw) -- 10s was too tight on a
-        // weak mobile uplink. Text-only turns are unaffected. This client
-        // is Hermes-only; the Gen 1 backend keeps its own in WendyApi.
+        // weak mobile uplink. Text-only turns are unaffected.
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
@@ -375,8 +385,7 @@ object HermesApi {
 
     /** Fetches the shared session's transcript. Empty list on any failure
      * (no session chosen, transient network error) rather than throwing --
-     * a blank chat screen is a fine fallback, same convention as
-     * WendyApi.fetchHistory(). */
+     * a blank chat screen is a fine fallback. */
     suspend fun fetchMessages(baseUrl: String, apiKey: String, sessionId: String): List<HermesHistoryEntry> =
         withContext(Dispatchers.IO) {
             try {

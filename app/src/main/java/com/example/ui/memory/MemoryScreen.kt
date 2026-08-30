@@ -55,7 +55,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.data.BackendMode
 import com.example.data.FestoAppState
 import com.example.data.HermesHistoryEntry
 import com.example.data.HermesSession
@@ -85,12 +84,9 @@ fun MemoryScreen(
 ) {
     val extendedColors = FestoTheme.colors
 
-    // Refresh the session list every time the browser opens -- same
-    // re-check-once-per-open pattern as the drawer's outbox badge.
+    // Refresh the session list every time the browser opens.
     LaunchedEffect(Unit) {
-        if (appState.backendMode == BackendMode.HERMES) {
-            appState.loadHermesSessions()
-        }
+        appState.loadHermesSessions()
     }
 
     Surface(

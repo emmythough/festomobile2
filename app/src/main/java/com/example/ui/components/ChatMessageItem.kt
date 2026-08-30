@@ -34,10 +34,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AttachFile
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ContentCopy
-import androidx.compose.material.icons.rounded.GraphicEq
-import androidx.compose.material.icons.rounded.Mic
-import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material.icons.rounded.RecordVoiceOver
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -61,7 +57,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.Message
-import com.example.data.Modality
 import com.example.data.Role
 import com.example.ui.components.markdown.RichMessageRenderer
 import com.example.ui.theme.FestoTheme
@@ -118,23 +113,6 @@ fun ChatMessageItem(
                         ),
                         color = extendedColors.brandNova
                     )
-                    if (message.modality == Modality.VOICE) {
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(extendedColors.brandNovaSoft)
-                                .padding(horizontal = 4.dp, vertical = 1.dp)
-                        ) {
-                            Text(
-                                text = "VOICE",
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    fontSize = 9.sp,
-                                    fontWeight = FontWeight.Bold
-                                ),
-                                color = extendedColors.brandNova
-                            )
-                        }
-                    }
                 }
             }
 
@@ -171,16 +149,7 @@ fun ChatMessageItem(
                 }
             ) {
                 Column {
-                    // Voice player indicator if voice modality
-                    if (message.modality == Modality.VOICE) {
-                        VoiceMessageHeader(
-                            durationSec = message.audioDurationSec ?: 3.0f,
-                            isUser = isUser
-                        )
-                        Spacer(modifier = Modifier.height(6.dp))
-                    }
-
-                    // Attachment badge -- the file itself already left the
+                    // Attachment badge -- the photo itself already left the
                     // device with the request; this is display only.
                     if (message.attachmentFilename != null) {
                         Row(
@@ -325,37 +294,6 @@ fun ChatMessageItem(
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun VoiceMessageHeader(
-    durationSec: Float,
-    isUser: Boolean
-) {
-    val extendedColors = FestoTheme.colors
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
-            .background(extendedColors.brandNovaSoft)
-            .padding(horizontal = 8.dp, vertical = 5.dp)
-    ) {
-        Icon(
-            imageVector = Icons.Rounded.GraphicEq,
-            contentDescription = "Spoken turn",
-            tint = extendedColors.brandNova,
-            modifier = Modifier.size(16.dp)
-        )
-        Text(
-            text = "Spoken Audio (${String.format(Locale.US, "%.1fs", durationSec)})",
-            style = MaterialTheme.typography.labelSmall.copy(
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 11.sp
-            ),
-            color = extendedColors.brandNova
-        )
     }
 }
 

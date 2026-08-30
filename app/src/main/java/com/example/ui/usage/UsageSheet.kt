@@ -240,7 +240,7 @@ fun UsageSheet(
             Spacer(modifier = Modifier.height(18.dp))
 
             if (appState.usageEvents.isEmpty()) {
-                // Same empty-state pattern as MemorySheet: icon + short
+                // Same empty-state pattern as the other sheets: icon + short
                 // title + one-line explanation, centered, instead of a
                 // bare blank area.
                 Column(

@@ -10,16 +10,14 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 
 /**
- * On-device voice dictation for HERMES mode.
+ * On-device voice dictation.
  *
- * The Gen 1 voice pipeline (VoiceAudioEngine -> base64 -> WendyApi STT ->
- * chat -> TTS -> playback) is coupled to Wendy's own server proxies, which
- * the Hermes gateway has no equivalent of -- there is NO audio/STT
- * endpoint to upload recordings to. So HERMES dictation takes the least
- * invasive path: the platform SpeechRecognizer transcribes on the device
- * (no recording file, no upload, no new dependency), and the transcript is
- * dropped into the chat composer where the user can edit it before
- * sending. It is never auto-sent.
+ * The Hermes gateway has no audio/STT endpoint to upload recordings to,
+ * so dictation takes the least invasive path: the platform
+ * SpeechRecognizer transcribes on the device (no recording file, no
+ * upload, no new dependency), and the transcript is dropped into the chat
+ * composer where the user can edit it before sending. It is never
+ * auto-sent.
  *
  * All callbacks arrive on the main thread (the recognizer must be created
  * on the thread's looper, which the UI composition provides). Callbacks

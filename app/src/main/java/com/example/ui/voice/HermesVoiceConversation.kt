@@ -8,7 +8,6 @@ import android.speech.tts.UtteranceProgressListener
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import com.example.data.BackendMode
 import com.example.data.FestoAppState
 import com.example.ui.components.markdown.audioPathRegex
 import com.example.ui.components.markdown.markdownImageRegex
@@ -45,8 +44,8 @@ import java.util.Locale
  * cleared.
  *
  * The loop is never auto-started: it runs only while the ChatScreen
- * headset toggle is on, and ChatScreen stops it on backend switch, screen
- * leave, and backgrounding. Gen 1 voice paths are untouched. Empty final
+ * headset toggle is on, and ChatScreen stops it on screen leave and
+ * backgrounding. Empty final
  * transcripts re-arm without sending (micropause rule); a TTS engine that
  * fails to init degrades the loop to dictation-only (still auto-sends,
  * replies stay as text) with a one-time chip message.
@@ -210,12 +209,11 @@ class HermesVoiceConversation(
 
     // ---- Public API -------------------------------------------------------
 
-    /** Starts the loop. Requires Hermes mode, a picked shared session, and
-     * RECORD_AUDIO (the ChatScreen permission flow enforces the last one).
-     * Fails fast with a chip message otherwise. */
+    /** Starts the loop. Requires a picked shared session and RECORD_AUDIO
+     * (the ChatScreen permission flow enforces the last one). Fails fast
+     * with a chip message otherwise. */
     fun start() {
         if (active) return
-        if (appState.backendMode != BackendMode.HERMES) return
         if (appState.hermesSessionId == null) {
             voiceNotice = "Pick a Wendy session in Settings first -- hands-free voice shares the session with Telegram."
             return
@@ -404,16 +402,12 @@ class HermesVoiceConversation(
             beginListenCycle(resetPartial = true)
             return
         }
-        if (appState.backendMode != BackendMode.HERMES || appState.hermesSessionId == null) {
-            // The ground shifted under the loop (backend switch, session
-            // cleared). Stop honestly rather than sending cross-backend.
+        if (appState.hermesSessionId == null) {
+            // The ground shifted under the loop (session cleared). Stop
+            // honestly rather than sending into nowhere.
             accumulated = ""
             livePartial = ""
-            voiceNotice = if (appState.hermesSessionId == null) {
-                "Pick a Wendy session in Settings first -- hands-free voice shares the session with Telegram."
-            } else {
-                "Voice conversation runs in Hermes mode only."
-            }
+            voiceNotice = "Pick a Wendy session in Settings first -- hands-free voice shares the session with Telegram."
             stop()
             return
         }

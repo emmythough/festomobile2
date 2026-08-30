@@ -19,35 +19,26 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DataUsage
-import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Logout
 import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.Settings
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Divider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.data.BackendMode
 import com.example.data.FestoAppState
-import com.example.data.WendyApi
 import com.example.ui.components.NovaAvatar
 import com.example.ui.theme.FestoTheme
 
@@ -58,20 +49,6 @@ fun ConversationDrawer(
     modifier: Modifier = Modifier
 ) {
     val extendedColors = FestoTheme.colors
-
-    // No polling loop -- the badge just re-checks once per drawer open.
-    // The outbox is a Gen 1 concept (Wendy's own server); the Hermes
-    // gateway has no file queue, so HERMES mode skips the call entirely
-    // rather than querying a server it isn't using.
-    LaunchedEffect(appState.isDrawerOpen) {
-        if (appState.isDrawerOpen) {
-            appState.outboxPendingCount = if (appState.backendMode == BackendMode.HERMES) {
-                0
-            } else {
-                WendyApi.fetchOutbox().size
-            }
-        }
-    }
 
     Surface(
         modifier = modifier
@@ -123,50 +100,9 @@ fun ConversationDrawer(
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            // Start Fresh Action Button -- resets the ONE real server-side
-            // session (shared with Telegram), not a fake local thread.
-            // Gen 1 only: Hermes mode shares one continuous gateway
-            // session with Telegram by design, so there's nothing to
-            // reset -- the top bar hides its own new-chat button there
-            // too.
-            if (appState.backendMode == BackendMode.GEN1) {
-                Button(
-                    onClick = { appState.startFreshConversation() },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(42.dp)
-                        .testTag("new_chat_drawer_button"),
-                    shape = RoundedCornerShape(21.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = extendedColors.brandNova,
-                        contentColor = Color.White
-                    )
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Add,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Text(
-                            text = "Start Fresh",
-                            style = MaterialTheme.typography.labelMedium.copy(
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 13.5.sp
-                            )
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Quick Nav Links (Memory & Telemetry). In HERMES mode the
-            // memory row opens the Wendy memory browser (gateway sessions
-            // + read-only transcripts); Gen 1 keeps the local memory sheet.
+            // Quick Nav Links (Memory & Telemetry). The memory row opens
+            // the Wendy memory browser (gateway sessions + read-only
+            // transcripts).
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -175,11 +111,7 @@ fun ConversationDrawer(
                     .border(1.dp, extendedColors.borderHairline, RoundedCornerShape(10.dp))
                     .clickable {
                         onClose()
-                        if (appState.backendMode == BackendMode.HERMES) {
-                            appState.isMemoryBrowserOpen = true
-                        } else {
-                            appState.isMemorySheetOpen = true
-                        }
+                        appState.isMemoryBrowserOpen = true
                     }
                     .padding(horizontal = 10.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -196,11 +128,7 @@ fun ConversationDrawer(
                         modifier = Modifier.size(16.dp)
                     )
                     Text(
-                        text = if (appState.backendMode == BackendMode.HERMES) {
-                            "Wendy memory"
-                        } else {
-                            "Cross-Session Memory"
-                        },
+                        text = "Wendy memory",
                         style = MaterialTheme.typography.labelMedium.copy(
                             fontWeight = FontWeight.Medium,
                             fontSize = 12.5.sp
@@ -215,11 +143,7 @@ fun ConversationDrawer(
                         .padding(horizontal = 6.dp, vertical = 2.dp)
                 ) {
                     Text(
-                        text = if (appState.backendMode == BackendMode.HERMES) {
-                            "${appState.hermesSessions.size}"
-                        } else {
-                            "${appState.memories.size}"
-                        },
+                        text = "${appState.hermesSessions.size}",
                         style = MaterialTheme.typography.labelSmall.copy(
                             fontWeight = FontWeight.Bold,
                             fontSize = 10.sp,
@@ -272,62 +196,6 @@ fun ConversationDrawer(
                         color = extendedColors.accentGreen
                     )
                 )
-            }
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            // Wendy's outbox -- a one-time pickup queue, hence the badge
-            // (0 means nothing waiting, so the badge is hidden entirely).
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(extendedColors.surfaceSubtle)
-                    .border(1.dp, extendedColors.borderHairline, RoundedCornerShape(10.dp))
-                    .clickable {
-                        onClose()
-                        appState.isFilesSheetOpen = true
-                    }
-                    .padding(horizontal = 10.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Folder,
-                        contentDescription = null,
-                        tint = extendedColors.accentBlue,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Text(
-                        text = "Wendy's Files",
-                        style = MaterialTheme.typography.labelMedium.copy(
-                            fontWeight = FontWeight.Medium,
-                            fontSize = 12.5.sp
-                        ),
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-                if (appState.outboxPendingCount > 0) {
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(extendedColors.brandNovaSoft)
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                    ) {
-                        Text(
-                            text = "${appState.outboxPendingCount}",
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 10.sp,
-                                color = extendedColors.brandNova
-                            )
-                        )
-                    }
-                }
             }
 
             Spacer(modifier = Modifier.height(6.dp))

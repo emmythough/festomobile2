@@ -1,6 +1,16 @@
 package com.example.ui.chat
 
-import androidx.compose.animation.AnimatedVisibility
+import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
+import android.util.Base64
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
@@ -9,8 +19,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -38,18 +47,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AddPhotoAlternate
 import androidx.compose.material.icons.rounded.ArrowUpward
-import androidx.compose.material.icons.rounded.AttachFile
-import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Build
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Headset
-import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.Speed
@@ -71,9 +76,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -84,6 +86,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -91,31 +94,20 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import android.Manifest
-import android.content.Context
-import android.content.pm.PackageManager
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.net.Uri
-import android.util.Base64
-import androidx.activity.result.PickVisualMediaRequest
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.compose.foundation.Image
-import androidx.compose.ui.platform.LocalContext
-import com.example.data.BackendMode
 import com.example.data.FestoAppState
 import com.example.data.HermesImageAttachment
 import com.example.ui.components.ChatMessageItem
-import com.example.ui.components.ModelBadgeChip
 import com.example.ui.components.NovaAvatar
 import com.example.ui.theme.FestoTheme
 import com.example.ui.voice.HermesDictation
 import com.example.ui.voice.HermesVoiceConversation
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun ChatScreen(
@@ -128,17 +120,14 @@ fun ChatScreen(
     val context = LocalContext.current
 
     // ---- HERMES voice dictation (on-device) ----
-    // The Gen 1 voice pipeline records audio and sends it to Wendy's own
-    // STT/TTS proxies -- endpoints the Hermes gateway simply doesn't have.
-    // So in HERMES mode the mic actions run platform SpeechRecognizer
-    // dictation instead: live partials in a chip above the composer, final
-    // transcript dropped INTO the composer (never auto-sent) so the user
-    // can edit before sending. Declared before the launchers below, which
-    // call into it from their permission callbacks.
+    // The mic actions run platform SpeechRecognizer dictation: live
+    // partials in a chip above the composer, final transcript dropped INTO
+    // the composer (never auto-sent) so the user can edit before sending.
+    // Declared before the launchers below, which call into it from their
+    // permission callbacks.
     var isDictating by remember { mutableStateOf(false) }
     var dictationPartial by remember { mutableStateOf("") }
     var dictationError by remember { mutableStateOf<String?>(null) }
-    var pendingMicActionIsDictation by remember { mutableStateOf(false) }
 
     val dictation = remember(context) {
         HermesDictation(
@@ -190,11 +179,11 @@ fun ChatScreen(
     // ---- HERMES voice conversation (hands-free loop) ----
     // Speak -> auto-send on ~1.5s of silence -> reply streams -> spoken
     // aloud -> listen again. Runs ONLY while toggled on (headset button in
-    // the top bar, HERMES mode only) -- nothing auto-starts on app open,
-    // and the manual dictation mic above keeps working exactly as before.
-    // The controller reuses the dictation recognizer pattern and the
-    // composer's send path (FestoAppState.sendMessage); no HTTP and no
-    // recognition plumbing is duplicated here.
+    // the top bar) -- nothing auto-starts on app open, and the manual
+    // dictation mic above keeps working exactly as before. The controller
+    // reuses the dictation recognizer pattern and the composer's send path
+    // (FestoAppState.sendMessage); no HTTP and no recognition plumbing is
+    // duplicated here.
     val voiceConversation = remember(context) {
         HermesVoiceConversation(context = context, appState = appState)
     }
@@ -225,73 +214,37 @@ fun ChatScreen(
         voiceConversation.start()
     }
 
-    // A backend switch mid-dictation leaves an in-flight recognizer whose
-    // transcript would land after the switch -- discard it instead. The
-    // voice-conversation loop is Hermes-only and stops with it too.
-    LaunchedEffect(appState.backendMode) {
-        if (appState.backendMode != BackendMode.HERMES) {
-            if (isDictating || dictationError != null) {
-                cancelDictation()
-            }
-            voiceConversation.stop()
-        }
-    }
-
-    // Opens the voice overlay (Gen 1) or starts dictation (HERMES),
-    // requesting RECORD_AUDIO permission the first time. Once granted,
-    // resumes whichever action was pending.
+    // Starts dictation (or the hands-free loop, depending on which action
+    // was pending), requesting RECORD_AUDIO permission the first time.
+    // Once granted, resumes whichever action was pending.
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
         appState.onMicPermissionResult(granted)
-        val wantsDictation = pendingMicActionIsDictation
         val wantsConversation = pendingMicActionIsConversation
-        pendingMicActionIsDictation = false
         pendingMicActionIsConversation = false
         if (granted) {
-            when {
-                wantsConversation -> startVoiceConversation()
-                wantsDictation -> startDictation()
-                else -> {
-                    appState.isVoiceOverlayOpen = true
-                    appState.startVoiceRecording()
-                }
-            }
+            if (wantsConversation) startVoiceConversation() else startDictation()
+        } else if (wantsConversation) {
+            voiceConversation.voiceNotice =
+                "Microphone permission denied -- enable it in Settings for hands-free voice."
         } else {
-            when {
-                wantsConversation -> {
-                    voiceConversation.voiceNotice =
-                        "Microphone permission denied -- enable it in Settings for hands-free voice."
-                }
-                wantsDictation -> {
-                    dictationError = "Microphone permission denied -- enable it in Settings to dictate."
-                }
-                else -> {
-                    appState.isVoiceOverlayOpen = true
-                    appState.voiceLiveTranscript = "Microphone permission denied. Enable it in Settings to use voice."
-                }
-            }
+            dictationError = "Microphone permission denied -- enable it in Settings to dictate."
         }
     }
     val openVoice: () -> Unit = {
-        val isHermes = appState.backendMode == BackendMode.HERMES
         val granted = ContextCompat.checkSelfPermission(
             context, Manifest.permission.RECORD_AUDIO
         ) == PackageManager.PERMISSION_GRANTED
         appState.onMicPermissionResult(granted)
         if (granted) {
-            if (isHermes) {
-                // The hands-free loop holds the recognizer while it runs;
-                // taking over with manual dictation stops the loop first
-                // (two SpeechRecognizers would fight over the mic).
-                if (voiceConversation.isActive) voiceConversation.stop()
-                if (isDictating) stopDictation() else startDictation()
-            } else {
-                appState.isVoiceOverlayOpen = true
-                appState.startVoiceRecording()
-            }
+            // The hands-free loop holds the recognizer while it runs;
+            // taking over with manual dictation stops the loop first
+            // (two SpeechRecognizers would fight over the mic).
+            if (voiceConversation.isActive) voiceConversation.stop()
+            if (isDictating) stopDictation() else startDictation()
         } else {
-            pendingMicActionIsDictation = isHermes
+            pendingMicActionIsConversation = false
             permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
@@ -311,7 +264,6 @@ fun ChatScreen(
                 startVoiceConversation()
             }
         } else {
-            pendingMicActionIsDictation = false
             pendingMicActionIsConversation = true
             permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
@@ -340,9 +292,7 @@ fun ChatScreen(
             ChatTopBar(
                 appState = appState,
                 onOpenDrawer = { appState.isDrawerOpen = true },
-                onOpenModelPicker = { appState.isModelSheetOpen = true },
                 onOpenVoice = openVoice,
-                onNewChat = { appState.startFreshConversation() },
                 conversationActive = voiceConversation.isActive,
                 onToggleVoiceConversation = toggleVoiceConversation
             )
@@ -355,31 +305,9 @@ fun ChatScreen(
                     .background(extendedColors.borderHairline)
             )
 
-            // Session reset failure chip -- a failed "Start Fresh" must not
-            // look like it succeeded (same dismissible-chip pattern the
-            // composer uses for attachmentError). Tap to dismiss.
-            appState.sessionResetError?.let { resetError ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 14.dp, vertical = 6.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(extendedColors.accentAmberSoft)
-                        .clickable { appState.sessionResetError = null }
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
-                ) {
-                    Text(
-                        text = resetError,
-                        style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.sp),
-                        color = extendedColors.accentAmber
-                    )
-                }
-            }
-
-            // Hermes notice chip -- same dismissible-chip pattern as
-            // sessionResetError above: covers "no session picked yet",
-            // fresh-chat attempts in Hermes mode, and other situations
-            // the gateway genuinely can't serve.
+            // Hermes notice chip -- dismissible amber chip covering "no
+            // session picked yet" and other situations the gateway
+            // genuinely can't serve. Tap to dismiss.
             appState.hermesNotice?.let { notice ->
                 Row(
                     modifier = Modifier
@@ -408,8 +336,7 @@ fun ChatScreen(
                     EmptyChatStarter(
                         onSelectPrompt = { prompt ->
                             appState.sendMessage(prompt)
-                        },
-                        onOpenVoice = openVoice
+                        }
                     )
                 } else {
                     LazyColumn(
@@ -471,10 +398,9 @@ fun ChatScreen(
                 }
             }
 
-            // HERMES dictation status -- live partial transcript while the
-            // on-device recognizer listens, or a dismissible error. Never
-            // rendered in Gen 1 (whose voice path is the overlay pipeline).
-            if (appState.backendMode == BackendMode.HERMES && (isDictating || dictationError != null)) {
+            // Dictation status -- live partial transcript while the
+            // on-device recognizer listens, or a dismissible error.
+            if (isDictating || dictationError != null) {
                 DictationStatusChip(
                     isListening = isDictating,
                     partial = dictationPartial,
@@ -485,14 +411,12 @@ fun ChatScreen(
                 )
             }
 
-            // HERMES voice-conversation loop status -- what the loop is
-            // doing right now (listening… / thinking… / speaking…), the
-            // mute switch for private situations, and a Stop affordance.
+            // Voice-conversation loop status -- what the loop is doing
+            // right now (listening… / thinking… / speaking…), the mute
+            // switch for private situations, and a Stop affordance.
             // Notices (TTS unavailable, dropped send) use the same amber
             // chip pattern as the dictation/attachment errors.
-            if (appState.backendMode == BackendMode.HERMES &&
-                (voiceConversation.isActive || voiceConversation.voiceNotice != null)
-            ) {
+            if (voiceConversation.isActive || voiceConversation.voiceNotice != null) {
                 VoiceConversationChip(
                     phase = voiceConversation.phase,
                     partial = voiceConversation.livePartial,
@@ -509,28 +433,21 @@ fun ChatScreen(
                 inputText = inputText,
                 onTextChange = { inputText = it },
                 onSend = {
-                    if (inputText.isNotBlank() ||
-                        appState.pendingAttachment != null ||
-                        appState.pendingHermesImage != null
-                    ) {
+                    if (inputText.isNotBlank() || appState.pendingHermesImage != null) {
                         val text = inputText
                         inputText = ""
                         appState.sendMessage(text)
                     }
                 },
                 onOpenVoice = openVoice,
-                onPickAttachment = { filename, bytes -> appState.setPendingAttachment(filename, bytes) },
-                onAttachmentReadFailed = { filename ->
-                    appState.attachmentError = "Couldn't read \"$filename\" -- try picking it again."
-                },
-                pendingAttachmentFilename = appState.pendingAttachment?.filename,
-                onClearAttachment = { appState.clearPendingAttachment() },
-                isHermesMode = appState.backendMode == BackendMode.HERMES,
                 pendingImage = appState.pendingHermesImage,
                 onPickImage = { filename, jpegBytes ->
                     appState.setPendingHermesImage(filename, jpegBytes)
                 },
                 onClearPendingImage = { appState.clearPendingHermesImage() },
+                onAttachmentReadFailed = { filename ->
+                    appState.attachmentError = "Couldn't read \"$filename\" -- try picking it again."
+                },
                 attachmentError = appState.attachmentError,
                 onDismissAttachmentError = { appState.attachmentError = null },
                 isStreaming = appState.isStreamingResponse
@@ -543,9 +460,7 @@ fun ChatScreen(
 private fun ChatTopBar(
     appState: FestoAppState,
     onOpenDrawer: () -> Unit,
-    onOpenModelPicker: () -> Unit,
     onOpenVoice: () -> Unit,
-    onNewChat: () -> Unit,
     conversationActive: Boolean,
     onToggleVoiceConversation: () -> Unit
 ) {
@@ -575,64 +490,55 @@ private fun ChatTopBar(
                 )
             }
 
-            if (appState.backendMode == BackendMode.HERMES) {
-                // Hermes mode has no model switch (the gateway picks) --
-                // show which backend is live instead of the model chip.
-                HermesBackendBadge()
-            } else {
-                ModelBadgeChip(
-                    model = appState.selectedModel,
-                    onClick = onOpenModelPicker
-                )
-            }
+            // The model the gateway is actually using -- no picker; the
+            // gateway picks, and the badge just reports it.
+            HermesModelBadge(modelName = appState.hermesActiveModel)
         }
 
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            // Hands-free voice conversation toggle -- HERMES only, distinct
-            // from the dictation mic: pulsing while the loop runs, tap
-            // again to stop it. Gen 1 never sees it.
-            if (appState.backendMode == BackendMode.HERMES) {
-                val pulse = if (conversationActive) {
-                    val transition = rememberInfiniteTransition(label = "voiceConversationPulse")
-                    val pulseAlpha by transition.animateFloat(
-                        initialValue = 1f,
-                        targetValue = 0.45f,
-                        animationSpec = infiniteRepeatable(
-                            animation = tween(650),
-                            repeatMode = RepeatMode.Reverse
-                        ),
-                        label = "voiceConversationPulseAlpha"
+            // Hands-free voice conversation toggle -- distinct from the
+            // dictation mic: pulsing while the loop runs, tap again to
+            // stop it.
+            val pulse = if (conversationActive) {
+                val transition = rememberInfiniteTransition(label = "voiceConversationPulse")
+                val pulseAlpha by transition.animateFloat(
+                    initialValue = 1f,
+                    targetValue = 0.45f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(650),
+                        repeatMode = RepeatMode.Reverse
+                    ),
+                    label = "voiceConversationPulseAlpha"
+                )
+                pulseAlpha
+            } else {
+                1f
+            }
+            IconButton(
+                onClick = onToggleVoiceConversation,
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(
+                        if (conversationActive) extendedColors.brandNova
+                        else extendedColors.brandNovaSoft
                     )
-                    pulseAlpha
-                } else {
-                    1f
-                }
-                IconButton(
-                    onClick = onToggleVoiceConversation,
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(CircleShape)
-                        .background(
-                            if (conversationActive) extendedColors.brandNova
-                            else extendedColors.brandNovaSoft
-                        )
-                        .alpha(pulse)
-                        .testTag("hermes_voice_conversation_toggle")
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Headset,
-                        contentDescription = if (conversationActive) {
-                            "Stop voice conversation"
-                        } else {
-                            "Start voice conversation"
-                        },
-                        tint = if (conversationActive) Color.White else extendedColors.brandNova,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
+                    .alpha(pulse)
+                    .testTag("hermes_voice_conversation_toggle")
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Headset,
+                    contentDescription = if (conversationActive) {
+                        "Stop voice conversation"
+                    } else {
+                        "Start voice conversation"
+                    },
+                    tint = if (conversationActive) Color.White else extendedColors.brandNova,
+                    modifier = Modifier.size(18.dp)
+                )
             }
 
             // Voice Shortcut Button
@@ -651,38 +557,32 @@ private fun ChatTopBar(
                     modifier = Modifier.size(18.dp)
                 )
             }
-
-            // New Conversation Action -- Gen 1 only: Hermes mode shares
-            // ONE session with Telegram, there's nothing fresh to start.
-            if (appState.backendMode == BackendMode.GEN1) {
-                IconButton(
-                    onClick = onNewChat,
-                    modifier = Modifier.size(36.dp).testTag("new_chat_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Add,
-                        contentDescription = "New Chat",
-                        tint = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.size(22.dp)
-                    )
-                }
-            }
         }
     }
 }
 
-/** Static backend badge shown in the top bar while on the Hermes
- * gateway -- the model chip would be a lie here (the gateway picks the
- * model), so this just says which brain you're talking to. */
+/** Top-bar model badge: shows the model the gateway actually used for its
+ * most recent reply (from the stream's usage frames), falling back to
+ * "Wendy" until the first reply arrives. Tapping explains the badge --
+ * there is no picker; the gateway picks the model. */
 @Composable
-private fun HermesBackendBadge() {
+private fun HermesModelBadge(modelName: String?) {
     val extendedColors = FestoTheme.colors
+    val context = LocalContext.current
+    val display = modelName?.takeIf { it.isNotBlank() } ?: "Wendy"
     Row(
         modifier = Modifier
-            .testTag("backend_badge_chip")
+            .testTag("model_badge_chip")
             .clip(RoundedCornerShape(20.dp))
             .background(extendedColors.brandNovaSoft)
             .border(1.dp, extendedColors.brandNovaLine, RoundedCornerShape(20.dp))
+            .clickable {
+                Toast.makeText(
+                    context,
+                    "Model your gateway is using: $display",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
             .padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -694,20 +594,22 @@ private fun HermesBackendBadge() {
             modifier = Modifier.size(14.dp)
         )
         Text(
-            text = "Hermes gateway",
+            text = display,
             style = MaterialTheme.typography.labelMedium.copy(
                 fontWeight = FontWeight.SemiBold,
                 fontSize = 12.5.sp
             ),
-            color = MaterialTheme.colorScheme.onSurface
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.widthIn(max = 180.dp)
         )
     }
 }
 
 @Composable
 private fun EmptyChatStarter(
-    onSelectPrompt: (String) -> Unit,
-    onOpenVoice: () -> Unit
+    onSelectPrompt: (String) -> Unit
 ) {
     val extendedColors = FestoTheme.colors
 
@@ -732,7 +634,7 @@ private fun EmptyChatStarter(
         )
 
         Text(
-            text = "Unified text & voice intelligence with cross-session recall",
+            text = "One continuous conversation with Wendy -- here and on Telegram",
             style = MaterialTheme.typography.bodySmall.copy(
                 fontSize = 12.5.sp,
                 color = extendedColors.inkTertiary
@@ -748,21 +650,21 @@ private fun EmptyChatStarter(
         ) {
             StarterCard(
                 icon = Icons.Rounded.Speed,
-                title = "Model Cost & Latency Benchmark",
-                subtitle = "Compare Flash, Sonnet & Haiku",
-                onClick = { onSelectPrompt("Compare the pricing, context length, and latency tradeoffs among our available models.") }
+                title = "Catch Me Up",
+                subtitle = "Summarize what we've discussed and what's open",
+                onClick = { onSelectPrompt("Catch me up: summarize what we've discussed recently and what's still open.") }
             )
             StarterCard(
                 icon = Icons.Rounded.Code,
-                title = "Mobile Audio Protocol Spec",
-                subtitle = "Review 24kHz PCM16 buffer management & barge-in",
-                onClick = { onSelectPrompt("Summarize how our 24kHz mono PCM16 audio streaming and instant barge-in work on Android.") }
+                title = "Think It Through",
+                subtitle = "Reason through a problem step by step",
+                onClick = { onSelectPrompt("Help me think through a problem step by step -- ask me clarifying questions first.") }
             )
             StarterCard(
                 icon = Icons.Rounded.Psychology,
-                title = "Vector Memory Indexing",
-                subtitle = "Analyze pgvector 1536-dim HNSW recall",
-                onClick = { onSelectPrompt("Explain how pgvector HNSW indexing retrieves durable memories across separate conversations.") }
+                title = "What Do You Remember?",
+                subtitle = "Recall from our shared conversation",
+                onClick = { onSelectPrompt("What do you remember about me and my projects so far?") }
             )
         }
     }
@@ -823,14 +725,10 @@ private fun ChatComposer(
     onTextChange: (String) -> Unit,
     onSend: () -> Unit,
     onOpenVoice: () -> Unit,
-    onPickAttachment: (filename: String, bytes: ByteArray) -> Unit,
-    onAttachmentReadFailed: (filename: String) -> Unit,
-    pendingAttachmentFilename: String?,
-    onClearAttachment: () -> Unit,
-    isHermesMode: Boolean,
     pendingImage: HermesImageAttachment?,
     onPickImage: (filename: String, jpegBytes: ByteArray) -> Unit,
     onClearPendingImage: () -> Unit,
+    onAttachmentReadFailed: (filename: String) -> Unit,
     attachmentError: String?,
     onDismissAttachmentError: () -> Unit,
     isStreaming: Boolean
@@ -839,52 +737,16 @@ private fun ChatComposer(
     val context = LocalContext.current
     val composerScope = rememberCoroutineScope()
     val hapticFeedback = LocalHapticFeedback.current
-    // A HERMES photo counts as content too -- an image-only send (no
-    // caption) is valid, same as Telegram's bare photo upload.
-    val canSend = (inputText.isNotBlank() || pendingAttachmentFilename != null || pendingImage != null) && !isStreaming
+    // A photo counts as content too -- an image-only send (no caption) is
+    // valid, same as Telegram's bare photo upload.
+    val canSend = (inputText.isNotBlank() || pendingImage != null) && !isStreaming
 
-    // Storage Access Framework picker -- no runtime permission needed
-    // (unlike RECORD_AUDIO above), the system handles access to whatever
-    // the user picks.
-    val filePicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        val resolver = context.contentResolver
-        // Reading the full byte stream must never run on the composition
-        // thread -- an unconstrained read up to the 12MB cap is a real ANR
-        // risk there. IO dispatcher, hop back automatically for the state
-        // write onPickAttachment does.
-        composerScope.launch(Dispatchers.IO) {
-            val name = resolver.query(uri, null, null, null, null)?.use { cursor ->
-                val idx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                if (idx >= 0 && cursor.moveToFirst()) cursor.getString(idx) else null
-            } ?: uri.lastPathSegment ?: "attachment"
-            try {
-                val bytes = resolver.openInputStream(uri)?.use { it.readBytes() }
-                withContext(Dispatchers.Main) {
-                    if (bytes != null) {
-                        // Light tick on a successful pick only -- read
-                        // failures below stay silent (the amber error chip
-                        // is the feedback there).
-                        hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        onPickAttachment(name, bytes)
-                    } else {
-                        onAttachmentReadFailed(name)
-                    }
-                }
-            } catch (_: java.io.IOException) {
-                withContext(Dispatchers.Main) { onAttachmentReadFailed(name) }
-            }
-        }
-    }
-
-    // HERMES photo picker -- the system visual-media picker (no runtime
+    // Photo picker -- the system visual-media picker (no runtime
     // permission; the system grants access to whatever is picked). The
     // pick is downscaled to max 1280px / JPEG ~80 OFF the main thread so
     // the request body lands far under the gateway's ~5MB sensible
-    // ceiling. Decode failure reports through the same amber chip as the
-    // file picker.
+    // ceiling. Decode failure reports through the same amber chip as any
+    // attachment error.
     val imagePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri: Uri? ->
@@ -893,7 +755,9 @@ private fun ChatComposer(
             val picked = decodePickedImageForHermes(context, uri)
             withContext(Dispatchers.Main) {
                 if (picked != null) {
-                    // Same light tick on a successful pick as the file path.
+                    // Light tick on a successful pick -- read failures
+                    // below stay silent (the amber error chip is the
+                    // feedback there).
                     hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                     onPickImage(picked.first, picked.second)
                 } else {
@@ -908,44 +772,10 @@ private fun ChatComposer(
             .fillMaxWidth()
             .padding(horizontal = 14.dp, vertical = 10.dp)
     ) {
-        // Pending HERMES photo chip -- thumbnail of the downscaled JPEG
-        // that will ride the next send, until sent or cleared.
+        // Pending photo chip -- thumbnail of the downscaled JPEG that
+        // will ride the next send, until sent or cleared.
         pendingImage?.let { image ->
             PendingImageChip(image = image, onClear = onClearPendingImage)
-        }
-        // Pending attachment chip -- shown above the input row once a file
-        // is picked, until sent or cleared.
-        if (pendingAttachmentFilename != null) {
-            Row(
-                modifier = Modifier
-                    .padding(bottom = 6.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(extendedColors.brandNovaSoft)
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.AttachFile,
-                    contentDescription = null,
-                    tint = extendedColors.brandNova,
-                    modifier = Modifier.size(14.dp)
-                )
-                Text(
-                    text = pendingAttachmentFilename,
-                    style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.sp),
-                    color = extendedColors.brandNova,
-                    modifier = Modifier.weight(1f, fill = false)
-                )
-                Icon(
-                    imageVector = Icons.Rounded.Close,
-                    contentDescription = "Remove attachment",
-                    tint = extendedColors.brandNova,
-                    modifier = Modifier
-                        .size(14.dp)
-                        .clickable(onClick = onClearAttachment)
-                )
-            }
         }
         if (attachmentError != null) {
             Row(
@@ -973,43 +803,23 @@ private fun ChatComposer(
                 .padding(horizontal = 6.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Attach an image -- HERMES only: opens the system photo
-            // picker; the pick becomes a downscaled data-URL image part on
-            // the next send (the gateway's content-array contract). Gen 1
-            // keeps its file attachment flow in the else branch, untouched.
-            if (isHermesMode) {
-                IconButton(
-                    onClick = {
-                        imagePicker.launch(
-                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                        )
-                    },
-                    modifier = Modifier.size(36.dp).testTag("composer_attach_image_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.AddPhotoAlternate,
-                        contentDescription = "Attach a photo",
-                        tint = extendedColors.brandNova,
-                        modifier = Modifier.size(20.dp)
+            // Attach an image: opens the system photo picker; the pick
+            // becomes a downscaled data-URL image part on the next send
+            // (the gateway's content-array contract).
+            IconButton(
+                onClick = {
+                    imagePicker.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                     )
-                }
-            } else {
-                // Attach a file -- real, working: opens the system picker,
-                // reads the bytes, and the message carries it as base64 to
-                // POST /api/chat's "attachment" field (see AI_STUDIO_BRIEF.md
-                // R-series for the rendering side; this is the actual gap the
-                // owner flagged as missing).
-                IconButton(
-                    onClick = { filePicker.launch("*/*") },
-                    modifier = Modifier.size(36.dp).testTag("composer_attach_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.AttachFile,
-                        contentDescription = "Attach a file",
-                        tint = extendedColors.brandNova,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
+                },
+                modifier = Modifier.size(36.dp).testTag("composer_attach_image_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.AddPhotoAlternate,
+                    contentDescription = "Attach a photo",
+                    tint = extendedColors.brandNova,
+                    modifier = Modifier.size(20.dp)
+                )
             }
 
             // Microphone action button
@@ -1265,9 +1075,8 @@ private fun VoiceConversationChip(
     }
 }
 
-/** Pending HERMES photo chip: a thumbnail decoded off-thread from the
- * downscaled JPEG that will ride the next send, plus name/size and an X
- * to clear -- mirroring the pending file chip above it. */
+/** Pending photo chip: a thumbnail decoded off-thread from the downscaled
+ * JPEG that will ride the next send, plus name/size and an X to clear. */
 @Composable
 private fun PendingImageChip(
     image: HermesImageAttachment,

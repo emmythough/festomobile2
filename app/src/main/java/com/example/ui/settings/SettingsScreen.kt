@@ -59,7 +59,6 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.data.BackendMode
 import com.example.data.FestoAppState
 import com.example.data.HermesSession
 import com.example.data.ThemeMode
@@ -103,7 +102,7 @@ fun SettingsScreen(
                 .padding(bottom = 32.dp)
         ) {
             // Header -- same icon + title/subtitle + close pattern as
-            // MemorySheet / ModelPickerSheet / UsageSheet.
+            // UsageSheet.
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -216,81 +215,21 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            // Backend section -- which brain Wendy answers from. Gen 1 is
-            // the original direct connection (model switching, voice,
-            // file delivery); Hermes is the gateway Telegram's Wendy
-            // runs behind, so the app and Telegram share ONE session.
-            Text(
-                text = "BACKEND",
-                style = MaterialTheme.typography.labelSmall.copy(
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 10.sp,
-                    letterSpacing = 1.sp
-                ),
-                color = extendedColors.inkTertiary
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Backend segmented control -- same shape/tap behavior as the
-            // theme control above; switching reloads the transcript from
-            // the newly active backend.
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(extendedColors.surfaceSubtle)
-                    .border(1.dp, extendedColors.borderHairline, RoundedCornerShape(10.dp))
-                    .padding(4.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                BackendMode.entries.forEach { mode ->
-                    val isSelected = appState.backendMode == mode
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(7.dp))
-                            .background(if (isSelected) extendedColors.brandNova else Color.Transparent)
-                            .clickable {
-                                hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                appState.setBackendMode(mode)
-                            }
-                            .padding(vertical = 9.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = mode.label,
-                            style = MaterialTheme.typography.labelMedium.copy(
-                                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
-                                fontSize = 12.5.sp
-                            ),
-                            color = if (isSelected) Color.White else extendedColors.inkTertiary
-                        )
-                    }
-                }
-            }
-
             Spacer(modifier = Modifier.height(6.dp))
 
             Text(
-                text = when (appState.backendMode) {
-                    BackendMode.GEN1 ->
-                        "Gen 1 talks straight to Wendy's own server -- model switching, voice and file delivery."
-                    BackendMode.HERMES ->
-                        "Hermes goes through the gateway Telegram's Wendy runs on -- one shared conversation, no model switch."
-                },
+                text = "System follows your device's light or dark setting.",
                 style = MaterialTheme.typography.bodySmall.copy(
                     fontSize = 11.5.sp,
                     color = extendedColors.inkTertiary
                 )
             )
 
-            // Hermes gateway configuration -- URL, API key, and the
-            // shared Wendy session picker. Only shown in Hermes mode;
-            // Gen 1's settings stay exactly as they were.
-            if (appState.backendMode == BackendMode.HERMES) {
-                HermesGatewaySection(appState = appState, hapticFeedback = hapticFeedback)
-            }
+            // Gateway configuration -- URL, API key, and the shared Wendy
+            // session picker. The app talks to the Hermes gateway (the one
+            // Telegram's Wendy runs behind), so the app and Telegram share
+            // ONE session.
+            HermesGatewaySection(appState = appState, hapticFeedback = hapticFeedback)
         }
     }
 }
@@ -303,12 +242,10 @@ private fun HermesGatewaySection(
     val extendedColors = FestoTheme.colors
     var showApiKey by remember { mutableStateOf(false) }
 
-    // Fetch the gateway's session list the first time this section opens
-    // (and whenever the user re-enters Hermes mode with nothing loaded);
+    // Fetch the gateway's session list the first time this section opens;
     // the Refresh/Retry button re-fetches on demand.
-    LaunchedEffect(appState.backendMode) {
-        if (appState.backendMode == BackendMode.HERMES &&
-            appState.hermesSessions.isEmpty() &&
+    LaunchedEffect(Unit) {
+        if (appState.hermesSessions.isEmpty() &&
             !appState.hermesSessionsLoading &&
             appState.hermesSessionsError == null
         ) {
@@ -403,7 +340,7 @@ private fun HermesGatewaySection(
         )
 
         Text(
-            text = "Stored on this device only, sent as a Bearer header -- same handling as the Gen 1 token.",
+            text = "Stored on this device only, sent as a Bearer header.",
             style = MaterialTheme.typography.bodySmall.copy(
                 fontSize = 11.sp,
                 color = extendedColors.inkTertiary

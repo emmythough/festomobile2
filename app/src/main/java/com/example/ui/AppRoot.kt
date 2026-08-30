@@ -13,13 +13,11 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -29,13 +27,9 @@ import com.example.data.rememberFestoAppState
 import com.example.ui.auth.AuthScreen
 import com.example.ui.chat.ChatScreen
 import com.example.ui.drawer.ConversationDrawer
-import com.example.ui.files.FilesSheet
 import com.example.ui.memory.MemoryScreen
-import com.example.ui.memory.MemorySheet
-import com.example.ui.models.ModelPickerSheet
 import com.example.ui.settings.SettingsScreen
 import com.example.ui.usage.UsageSheet
-import com.example.ui.voice.VoiceOverlay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -88,22 +82,6 @@ fun AppRoot(
                     )
                 }
 
-                // Modal Model Picker Bottom Sheet
-                if (appState.isModelSheetOpen) {
-                    ModelPickerSheet(
-                        appState = appState,
-                        onDismiss = { appState.isModelSheetOpen = false }
-                    )
-                }
-
-                // Modal Memory Bottom Sheet
-                if (appState.isMemorySheetOpen) {
-                    MemorySheet(
-                        appState = appState,
-                        onDismiss = { appState.isMemorySheetOpen = false }
-                    )
-                }
-
                 // Modal Usage Bottom Sheet
                 if (appState.isUsageSheetOpen) {
                     UsageSheet(
@@ -120,18 +98,9 @@ fun AppRoot(
                     )
                 }
 
-                // Modal Wendy's Files (outbox) Bottom Sheet
-                if (appState.isFilesSheetOpen) {
-                    FilesSheet(
-                        appState = appState,
-                        onDismiss = { appState.isFilesSheetOpen = false }
-                    )
-                }
-
-                // Full-Screen Wendy Memory Screen (HERMES mode only --
-                // gateway session list + read-only transcripts with a
-                // client-side search filter; the gateway has no search
-                // endpoint to call).
+                // Full-Screen Wendy Memory Screen -- gateway session list +
+                // read-only transcripts with a client-side search filter
+                // (the gateway has no search endpoint to call).
                 AnimatedVisibility(
                     visible = appState.isMemoryBrowserOpen,
                     enter = fadeIn(),
@@ -140,18 +109,6 @@ fun AppRoot(
                     MemoryScreen(
                         appState = appState,
                         onClose = { appState.isMemoryBrowserOpen = false }
-                    )
-                }
-
-                // Full-Screen Interactive Voice Overlay
-                AnimatedVisibility(
-                    visible = appState.isVoiceOverlayOpen,
-                    enter = fadeIn(),
-                    exit = fadeOut()
-                ) {
-                    VoiceOverlay(
-                        appState = appState,
-                        onClose = { appState.isVoiceOverlayOpen = false }
                     )
                 }
             }

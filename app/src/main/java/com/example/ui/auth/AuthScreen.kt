@@ -334,7 +334,9 @@ fun AuthScreen(
                         // Honest disclaimer: submitAuth() always succeeds
                         // after a fixed delay -- there is no real account
                         // system. The actual access control is the bearer
-                        // token baked into WendyApi.kt, not this screen.
+                        // Demo sign-in is purely local to this screen --
+                        // the gateway session key is generated per install
+                        // in BackendPreferences, not here.
                         // Said plainly rather than letting a real-looking
                         // login form imply otherwise.
                         Text(
