@@ -108,7 +108,6 @@ class FestoAppState(
 
     // UI Layer Flags
     var isDrawerOpen by mutableStateOf(false)
-    var isMemoryBrowserOpen by mutableStateOf(false)
     var isUsageSheetOpen by mutableStateOf(false)
     var isSettingsSheetOpen by mutableStateOf(false)
 
