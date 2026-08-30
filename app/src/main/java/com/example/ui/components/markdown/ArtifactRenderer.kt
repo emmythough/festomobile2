@@ -97,7 +97,15 @@ import kotlinx.coroutines.delay
  * so the longest legitimate wait is HTML parse + the model's own inline
  * scripts + the [ARTIFACT_SETTLE_DELAY_MS] settle. 5s is generous headroom
  * for a slow phone and cuts the worst-case spinner by 3x versus mermaid. */
-internal const val ARTIFACT_LOAD_TIMEOUT_MS = 5_000L
+// Real, live-confirmed reason for this number: a genuinely valid artifact
+// (verified byte-for-byte in a real, unmodified desktop browser -- zero JS
+// errors, real height measured) still hit this timeout on an actual
+// device. The content was never the problem; 5s was too tight for a real
+// phone's FIRST-EVER WebView engine cold start in this app process
+// (Chromium renderer process spin-up), which a warm desktop browser never
+// pays. Raised with real headroom for that cold start plus local render,
+// still well under Mermaid's 15s CDN-fetch budget.
+internal const val ARTIFACT_LOAD_TIMEOUT_MS = 12_000L
 
 /** Settle delay between window load and the height measurement: long
  * enough that inline initializers which queue their own zero-timeout DOM
@@ -331,6 +339,19 @@ fun MessageArtifactBlock(
     var artifactHeight by remember(html) {
         mutableStateOf(INITIAL_ARTIFACT_HEIGHT_DP.dp)
     }
+    // Real reason for the last failure, shown in the fallback caption --
+    // previously every failure path (timeout, JS error, network error) was
+    // collapsed into one generic "Couldn't render this.", which is exactly
+    // why a real production failure needed a full manual repro (pulling
+    // the raw payload, reconstructing the wrapper, running it in a real
+    // browser) instead of just reading what actually went wrong.
+    var failureReason by remember(html) { mutableStateOf<String?>(null) }
+    fun fail(reason: String) {
+        if (state == ArtifactRenderState.Loading) {
+            failureReason = reason
+            state = ArtifactRenderState.Failed
+        }
+    }
 
     // Identical reads to MermaidRenderer.MessageMermaidBlock, feeding the
     // SAME MermaidPalette struct (reused here under its original name --
@@ -361,7 +382,7 @@ fun MessageArtifactBlock(
     // visibly. Shorter than mermaid's 15s (see ARTIFACT_LOAD_TIMEOUT_MS).
     LaunchedEffect(document) {
         delay(ARTIFACT_LOAD_TIMEOUT_MS)
-        if (state == ArtifactRenderState.Loading) state = ArtifactRenderState.Failed
+        fail("timed out after ${ARTIFACT_LOAD_TIMEOUT_MS / 1000}s waiting for the page to report ready")
     }
 
     Column(modifier = modifier.fillMaxWidth()) {
@@ -371,7 +392,7 @@ fun MessageArtifactBlock(
             CodeBlockView(code = html, language = "html")
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "Couldn't render this.",
+                text = "Couldn't render this" + (failureReason?.let { " — $it" } ?: "."),
                 style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
                 color = extendedColors.inkTertiary,
                 fontStyle = FontStyle.Italic,
@@ -432,11 +453,8 @@ fun MessageArtifactBlock(
                                     error: WebResourceError
                                 ) {
                                     if (!request.isForMainFrame) return
-                                    mainHandler.post {
-                                        if (state == ArtifactRenderState.Loading) {
-                                            state = ArtifactRenderState.Failed
-                                        }
-                                    }
+                                    val reason = "WebView error: ${error.description}"
+                                    mainHandler.post { fail(reason) }
                                 }
 
                                 override fun onReceivedHttpError(
@@ -445,11 +463,8 @@ fun MessageArtifactBlock(
                                     errorResponse: WebResourceResponse
                                 ) {
                                     if (!request.isForMainFrame) return
-                                    mainHandler.post {
-                                        if (state == ArtifactRenderState.Loading) {
-                                            state = ArtifactRenderState.Failed
-                                        }
-                                    }
+                                    val reason = "HTTP ${errorResponse.statusCode} loading the page"
+                                    mainHandler.post { fail(reason) }
                                 }
                             }
                             addJavascriptInterface(
@@ -467,12 +482,8 @@ fun MessageArtifactBlock(
                                             }
                                         }
                                     },
-                                    onError = { _ ->
-                                        mainHandler.post {
-                                            if (state == ArtifactRenderState.Loading) {
-                                                state = ArtifactRenderState.Failed
-                                            }
-                                        }
+                                    onError = { message ->
+                                        mainHandler.post { fail("JS error: $message") }
                                     }
                                 ),
                                 "AndroidBridge"
