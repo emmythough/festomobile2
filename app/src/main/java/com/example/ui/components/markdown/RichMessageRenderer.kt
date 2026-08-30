@@ -33,12 +33,17 @@ internal val markdownImageRegex = Regex("!\\[([^\\]]*)\\]\\(([^)\\s]+)\\)")
 
 /** A path-like token ending in an audio extension -- how the gateway
  * surfaces generated audio files in reply text. Deliberately conservative:
- * not preceded by "(", a word char, "@" or "." (so markdown links,
- * sentence words and email-ish strings don't half-match) and not followed
- * by a word char or "." (so "song.mp3." keeps its sentence period).
- * internal (not private) for the same TTS-stripper reuse as above. */
+ * not preceded by "(", a word char, "@" or "." (so sentence words and
+ * email-ish strings don't half-match), and not preceded by a URL-ish ":"
+ * or a path separator either -- "https://host/song.mp3" and
+ * "[listen](files/a.mp3)" must stay one link, not "[listen](https:" plus
+ * a bogus "//host/song.mp3" chip, and "C:\music\song.mp3" must not chip
+ * as a bare "song.mp3" (the token class crosses "/" and "\", so only the
+ * lookbehind can tell). Also not followed by a word char or "." (so
+ * "song.mp3." keeps its sentence period). internal (not private) for the
+ * same TTS-stripper reuse as above. */
 internal val audioPathRegex = Regex(
-    "(?<![\\w@(.])[\\w./\\\\-]+\\.(?:mp3|m4a|m4b|wav|ogg|oga|flac|aac|opus|wma)(?![\\w.])",
+    "(?<![\\w@(.:/\\\\])[\\w./\\\\-]+\\.(?:mp3|m4a|m4b|wav|ogg|oga|flac|aac|opus|wma)(?![\\w.])",
     RegexOption.IGNORE_CASE
 )
 
