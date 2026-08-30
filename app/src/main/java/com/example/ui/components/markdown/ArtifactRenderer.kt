@@ -3,6 +3,7 @@ package com.example.ui.components.markdown
 import android.annotation.SuppressLint
 import android.os.Handler
 import android.os.Looper
+import android.view.MotionEvent
 import android.webkit.JavascriptInterface
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -488,6 +489,37 @@ fun MessageArtifactBlock(
                                 ),
                                 "AndroidBridge"
                             )
+                            // Real, distinct bug class from the timeout one:
+                            // this WebView lives inside the chat's own
+                            // scrolling LazyColumn. A drag that starts on a
+                            // slider/range input inside the artifact is,
+                            // from the OUTER list's point of view,
+                            // indistinguishable from a vertical scroll
+                            // gesture -- without this, the LazyColumn can
+                            // steal the drag before the WebView's own input
+                            // element gets it, so the control looks present
+                            // but doesn't respond to touch. This is exactly
+                            // why Claude's own Artifacts don't hit this:
+                            // they render in a fixed panel that never
+                            // competes with a scrolling list for touch.
+                            // Standard Android fix: once a touch lands on
+                            // the WebView, tell every ancestor to stop
+                            // intercepting for the rest of this gesture,
+                            // then let the WebView's own (unrelated,
+                            // unmodified) touch handling proceed exactly as
+                            // before -- this listener never consumes the
+                            // event or changes what the WebView does with
+                            // it, only who else is allowed to see it first.
+                            setOnTouchListener { v, event ->
+                                if (event.action == MotionEvent.ACTION_DOWN) {
+                                    v.parent?.requestDisallowInterceptTouchEvent(true)
+                                } else if (event.action == MotionEvent.ACTION_UP ||
+                                    event.action == MotionEvent.ACTION_CANCEL
+                                ) {
+                                    v.parent?.requestDisallowInterceptTouchEvent(false)
+                                }
+                                false
+                            }
                         }.also { webViewRef.value = it }
                     },
                     update = { webView ->
