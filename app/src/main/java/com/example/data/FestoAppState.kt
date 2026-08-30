@@ -204,13 +204,21 @@ class FestoAppState(
         private set
 
     fun updateHermesBaseUrl(url: String) {
-        hermesBaseUrl = url
-        backendPrefs?.saveHermesBaseUrl(url)
+        // Trim on every keystroke, not just on save -- neither field has any
+        // valid use for leading/trailing whitespace, and a stray space from
+        // a mobile copy-paste (the realistic way this URL/key gets entered)
+        // produces a silent mismatch: the request goes out with the extra
+        // character and the gateway correctly rejects it, with no visible
+        // difference in the Settings field to explain why.
+        val trimmed = url.trim()
+        hermesBaseUrl = trimmed
+        backendPrefs?.saveHermesBaseUrl(trimmed)
     }
 
     fun updateHermesApiKey(key: String) {
-        hermesApiKey = key
-        backendPrefs?.saveHermesApiKey(key)
+        val trimmed = key.trim()
+        hermesApiKey = trimmed
+        backendPrefs?.saveHermesApiKey(trimmed)
     }
 
     /** Fetches the gateway's session list for the Settings picker. The
