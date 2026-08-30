@@ -13,6 +13,14 @@ sealed class MessageBlock {
     data class Code(val code: String, val language: String) : MessageBlock()
     data class Chart(val spec: ChartSpec, val fallbackRaw: String) : MessageBlock()
 
+    /** A ```mermaid fence -- Wendy's flowchart/sequence/state diagrams.
+     * Rendered by [MessageMermaidBlock] (android.webkit.WebView + mermaid.js
+     * from a pinned jsDelivr CDN URL). No parse-side syntax validation
+     * happens here: mermaid.js validates at render time, and that
+     * composable falls back to a plain code block (plus a caption) when
+     * rendering fails -- bad syntax, no network, CDN unreachable, JS error. */
+    data class Mermaid(val source: String) : MessageBlock()
+
     /** Assistant markdown image ![alt](src) -- the Hermes gateway inlines
      * Wendy's images as data URLs ("data:image/png;base64,..."); http(s)
      * image URLs are supported too. Rendered by MessageImageBlock because
@@ -147,6 +155,19 @@ fun parseMessageBlocks(raw: String): List<MessageBlock> {
                 // Fallback to standard code block if chart JSON is invalid or incomplete
                 blocks.add(MessageBlock.Code(codeBody, "chart"))
             }
+        } else if (lang == "mermaid") {
+            // Same fence mechanism as "chart" above, one branch over: the
+            // raw diagram source goes straight into MessageBlock.Mermaid --
+            // syntax validation is mermaid.js's job at render time inside
+            // the WebView, not the parser's (a valid-looking-only-half-
+            // streamed diagram must keep growing, not get demoted to code
+            // mid-stream). Only a blank body short-circuits: an empty
+            // diagram can never render, so it shows as a code block.
+            if (codeBody.isBlank()) {
+                blocks.add(MessageBlock.Code(codeBody, "mermaid"))
+            } else {
+                blocks.add(MessageBlock.Mermaid(codeBody))
+            }
         } else {
             blocks.add(MessageBlock.Code(codeBody, lang.ifBlank { "text" }))
         }
@@ -185,6 +206,9 @@ fun RichMessageRenderer(
                 }
                 is MessageBlock.Chart -> {
                     MessageChartBlock(spec = block.spec)
+                }
+                is MessageBlock.Mermaid -> {
+                    MessageMermaidBlock(source = block.source)
                 }
                 is MessageBlock.Image -> {
                     MessageImageBlock(source = block.source, alt = block.alt)
