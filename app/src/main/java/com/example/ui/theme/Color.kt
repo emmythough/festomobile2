@@ -41,6 +41,34 @@ val DarkBorderHairline = Color(0xFF3D3128)
 val DarkBorderMedium = Color(0xFF52422F)
 val DarkBorderStrong = Color(0xFF7A6448)
 
+// Syntax Highlighting Tokens (code blocks in chat + memory browser).
+// Mid-saturation tones for light surfaces (#FAFAF9 dialog), brighter pastels
+// for the dark dialog surface (#1C1C1C) -- both keep every token class legible
+// without leaving the Festo hue family.
+val LightSyntaxKeyword = Color(0xFF7B1FA2)
+val LightSyntaxString = Color(0xFF2E7D32)
+val LightSyntaxComment = Color(0xFF8A8A8A)
+val LightSyntaxNumber = Color(0xFFB45309)
+val LightSyntaxFunction = Color(0xFF1565C0)
+val LightSyntaxType = Color(0xFF0E7490)
+val LightSyntaxOperator = Color(0xFF52525B)
+val LightSyntaxAnnotation = Color(0xFF9A3412)
+val LightSyntaxTag = Color(0xFFBE123C)
+val LightSyntaxAttribute = Color(0xFF445588)
+val LightSyntaxProperty = Color(0xFF366CA8)
+
+val DarkSyntaxKeyword = Color(0xFFC792EA)
+val DarkSyntaxString = Color(0xFFA5D6A7)
+val DarkSyntaxComment = Color(0xFF8A8A8A)
+val DarkSyntaxNumber = Color(0xFFF5B77E)
+val DarkSyntaxFunction = Color(0xFF82AAFF)
+val DarkSyntaxType = Color(0xFF4EC9B0)
+val DarkSyntaxOperator = Color(0xFFB0B6C0)
+val DarkSyntaxAnnotation = Color(0xFFF5A97F)
+val DarkSyntaxTag = Color(0xFFF07178)
+val DarkSyntaxAttribute = Color(0xFFA8B8D8)
+val DarkSyntaxProperty = Color(0xFF74B6E8)
+
 // Semantic Accents
 val AccentGreen = Color(0xFF2E7D32)
 val AccentGreenSoft = Color(0x262E7D32)

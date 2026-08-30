@@ -144,7 +144,9 @@ fun CodeBlockView(
                     .padding(12.dp)
             ) {
                 Text(
-                    text = code,
+                    text = remember(code, displayLang, extendedColors.isDark) {
+                        highlightCode(code, displayLang, extendedColors.isDark)
+                    },
                     style = MaterialTheme.typography.bodySmall.copy(
                         fontFamily = FontFamily.Monospace,
                         fontSize = 12.5.sp,
