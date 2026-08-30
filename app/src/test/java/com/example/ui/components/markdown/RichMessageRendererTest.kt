@@ -119,4 +119,56 @@ class RichMessageRendererTest {
         assertEquals("outbox/song.mp3", (blocks[1] as MessageBlock.AudioFile).path)
         assertEquals("played.", (blocks[2] as MessageBlock.Markdown).content)
     }
+
+    // ---- ```artifact: the third fence lane (mirrors the mermaid branch) ----
+
+    @Test
+    fun `artifact fence becomes an Artifact block with the raw html`() {
+        // Markup with its own script/style tags must reach the renderer
+        // byte-for-byte; escaping/wrapping happens later, in
+        // buildArtifactHtml (ArtifactRenderer.kt).
+        val artifact = "<div class=\"calc\">\n  <input type=\"range\" min=\"0\" max=\"100\">\n  <style>.calc{color:red}</style>\n</div>"
+        val blocks = parseMessageBlocks("Try this:\n```artifact\n$artifact\n```\nNice.")
+        assertEquals(3, blocks.size)
+        assertEquals("Try this:", (blocks[0] as MessageBlock.Markdown).content)
+        val artifactBlock = blocks[1] as MessageBlock.Artifact
+        assertEquals(artifact, artifactBlock.html)
+        assertEquals("Nice.", (blocks[2] as MessageBlock.Markdown).content)
+    }
+
+    @Test
+    fun `unclosed artifact fence during streaming still parses the partial html`() {
+        // The \z branch of the fence regex: a stream caught mid-artifact
+        // must render as one growing Artifact block, not markdown garbage
+        // and not a prematurely demoted Code block.
+        val blocks = parseMessageBlocks("```artifact\n<div>\n  <p>partial")
+        assertEquals(1, blocks.size)
+        val artifact = blocks[0] as MessageBlock.Artifact
+        assertEquals("<div>\n  <p>partial", artifact.html)
+    }
+
+    @Test
+    fun `artifact language tag is case-insensitive like the other fences`() {
+        val blocks = parseMessageBlocks("```ARTIFACT\n<p>x</p>\n```")
+        assertEquals(1, blocks.size)
+        assertTrue(blocks[0] is MessageBlock.Artifact)
+        assertEquals("<p>x</p>", (blocks[0] as MessageBlock.Artifact).html)
+    }
+
+    @Test
+    fun `blank artifact body falls back to a Code block`() {
+        val blocks = parseMessageBlocks("```artifact\n```")
+        assertEquals(1, blocks.size)
+        val code = blocks[0] as MessageBlock.Code
+        assertEquals("", code.code)
+        assertEquals("artifact", code.language)
+    }
+
+    @Test
+    fun `full html document in an artifact fence is preserved verbatim`() {
+        val doc = "<!DOCTYPE html>\n<html>\n<body><p>x</p></body>\n</html>"
+        val blocks = parseMessageBlocks("```artifact\n$doc\n```")
+        assertEquals(1, blocks.size)
+        assertEquals(doc, (blocks[0] as MessageBlock.Artifact).html)
+    }
 }

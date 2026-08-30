@@ -21,6 +21,19 @@ sealed class MessageBlock {
      * rendering fails -- bad syntax, no network, CDN unreachable, JS error. */
     data class Mermaid(val source: String) : MessageBlock()
 
+    /** A ```artifact fence -- model-authored HTML markup (may carry its own
+     * <style>/<script> tags) for a genuinely interactive inline artifact:
+     * sliders, live-recalculating views, small dashboards. This is the
+     * third rendering lane alongside ```chart (simple data plots) and
+     * ```mermaid (diagrams), for what those two lanes genuinely cannot
+     * express. Rendered by [MessageArtifactBlock] in a sandboxed WebView
+     * that measures its own content height. No parse-side validation
+     * happens here either: the artifact's failure contract (JS onerror ->
+     * bridge, main-frame WebView errors, timeout catch-all) demotes any
+     * broken payload to a plain code block (plus a caption), exactly like
+     * the mermaid lane. */
+    data class Artifact(val html: String) : MessageBlock()
+
     /** Assistant markdown image ![alt](src) -- the Hermes gateway inlines
      * Wendy's images as data URLs ("data:image/png;base64,..."); http(s)
      * image URLs are supported too. Rendered by MessageImageBlock because
@@ -168,6 +181,19 @@ fun parseMessageBlocks(raw: String): List<MessageBlock> {
             } else {
                 blocks.add(MessageBlock.Mermaid(codeBody))
             }
+        } else if (lang == "artifact") {
+            // Third fence lane, same mechanism as "chart"/"mermaid" above,
+            // one branch over again: the raw HTML body goes straight into
+            // MessageBlock.Artifact -- validation is the artifact sandbox's
+            // job at render time inside the WebView, not the parser's (a
+            // half-streamed artifact must keep growing, not get demoted to
+            // code mid-stream). Only a blank body short-circuits: an empty
+            // artifact can never render, so it shows as a code block.
+            if (codeBody.isBlank()) {
+                blocks.add(MessageBlock.Code(codeBody, "artifact"))
+            } else {
+                blocks.add(MessageBlock.Artifact(codeBody))
+            }
         } else {
             blocks.add(MessageBlock.Code(codeBody, lang.ifBlank { "text" }))
         }
@@ -209,6 +235,9 @@ fun RichMessageRenderer(
                 }
                 is MessageBlock.Mermaid -> {
                     MessageMermaidBlock(source = block.source)
+                }
+                is MessageBlock.Artifact -> {
+                    MessageArtifactBlock(html = block.html)
                 }
                 is MessageBlock.Image -> {
                     MessageImageBlock(source = block.source, alt = block.alt)
