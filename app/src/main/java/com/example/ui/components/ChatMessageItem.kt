@@ -3,7 +3,6 @@ package com.example.ui.components
 import android.widget.Toast
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -12,7 +11,6 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -175,46 +173,32 @@ fun ChatMessageItem(
                         Spacer(modifier = Modifier.height(6.dp))
                     }
 
-                    // Content rendering. While streaming, wrap each growth in
-                    // AnimatedContent so v4's throttled ~1.5s edits crossfade
-                    // instead of snapping the whole bubble to new text.
+                    // Content rendering, streaming or not: rendered the SAME
+                    // way either way, no transition wrapper. Wendy's delta
+                    // contract is "full text so far, replace the bubble" --
+                    // every delta is a brand-new, longer string, which
+                    // means the previous AnimatedContent(targetState =
+                    // message.content) fired a full fade-out/fade-in/
+                    // slide/SizeTransform on EVERY delta: the entire
+                    // rendered content (including any chart/mermaid/
+                    // artifact WebView) tore down and rebuilt on every
+                    // single update, visible as a whole-screen flicker on
+                    // any real streamed reply. Real chat apps (ChatGPT,
+                    // Claude) update streaming text in place with no
+                    // per-delta transition at all -- that's the fix here,
+                    // not a tuned animation. Confirmed live 2026-08-30.
                     if (message.content.isNotBlank()) {
-                        if (message.isStreaming) {
-                            AnimatedContent(
-                                targetState = message.content,
-                                transitionSpec = {
-                                    (fadeIn(tween(180, delayMillis = 60)) + slideInVertically(tween(180)) { it / 6 })
-                                        .togetherWith(fadeOut(tween(90)))
-                                        .using(SizeTransform(clip = false))
-                                },
-                                label = "streaming_content"
-                            ) { animatedContent ->
-                                if (isUser) {
-                                    Text(
-                                        text = animatedContent,
-                                        style = MaterialTheme.typography.bodyMedium.copy(
-                                            lineHeight = 21.sp,
-                                            fontSize = 14.5.sp
-                                        ),
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
-                                } else {
-                                    RichMessageRenderer(content = animatedContent)
-                                }
-                            }
+                        if (isUser) {
+                            Text(
+                                text = message.content,
+                                style = MaterialTheme.typography.bodyMedium.copy(
+                                    lineHeight = 21.sp,
+                                    fontSize = 14.5.sp
+                                ),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
                         } else {
-                            if (isUser) {
-                                Text(
-                                    text = message.content,
-                                    style = MaterialTheme.typography.bodyMedium.copy(
-                                        lineHeight = 21.sp,
-                                        fontSize = 14.5.sp
-                                    ),
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                            } else {
-                                RichMessageRenderer(content = message.content)
-                            }
+                            RichMessageRenderer(content = message.content)
                         }
                     } else if (message.isStreaming) {
                         StreamingDotsIndicator()
