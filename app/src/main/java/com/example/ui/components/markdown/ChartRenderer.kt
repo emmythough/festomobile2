@@ -1,7 +1,6 @@
 package com.example.ui.components.markdown
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,7 +11,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.BarChart
 import androidx.compose.material.icons.rounded.ShowChart
@@ -132,12 +130,13 @@ fun MessageChartBlock(
         }
     }
 
+    // No card chrome by design: no fill, no border -- the chart floats
+    // directly on the chat background instead of reading as a boxed
+    // component embedded in the message. Padding alone keeps it from
+    // crowding the surrounding text.
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(extendedColors.surfaceDialog)
-            .border(1.dp, extendedColors.borderHairline, RoundedCornerShape(12.dp))
             .padding(14.dp)
     ) {
         Column {

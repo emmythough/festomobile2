@@ -10,8 +10,6 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,7 +19,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -34,7 +31,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.font.FontStyle
@@ -382,18 +378,15 @@ fun MessageArtifactBlock(
                 modifier = Modifier.padding(start = 4.dp)
             )
         } else {
-            // Same card as mermaid (RoundedCornerShape(12.dp), surfaceDialog
-            // background, hairline border) -- but the content reads as less
-            // of an embedded frame: no scrollbars ever, a fully transparent
-            // WebView background so the app surface shows through
-            // seamlessly, and a height that tracks the REAL measured
-            // content instead of a fixed diagram-sized box.
+            // No card chrome by design: no fill, no border -- the artifact
+            // floats directly on the chat background instead of reading as
+            // a boxed component embedded in the message. No scrollbars
+            // ever, a fully transparent WebView background so the app
+            // surface shows through seamlessly, and a height that tracks
+            // the REAL measured content instead of a fixed-size box.
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(extendedColors.surfaceDialog)
-                    .border(1.dp, extendedColors.borderHairline, RoundedCornerShape(12.dp))
             ) {
                 AndroidView(
                     factory = { ctx ->

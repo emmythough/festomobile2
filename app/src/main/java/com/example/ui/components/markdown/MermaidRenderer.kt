@@ -10,8 +10,6 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,7 +19,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -34,7 +31,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.font.FontStyle
@@ -249,7 +245,14 @@ fun MessageMermaidBlock(
     // FestoTheme.colors for the extended surfaces/acents -- resolved in
     // composition, baked into the HTML, refreshed when the theme changes.
     val palette = MermaidPalette(
-        background = extendedColors.surfaceDialog.toWebHex(),
+        // Transparent, not a real surface color -- the outer Box below no
+        // longer paints a card background of its own, so the diagram's
+        // page/canvas backdrop needs to be transparent too or it would show
+        // as a mismatched color patch floating on the chat background
+        // instead of genuinely floating. Node/cluster fills are separate
+        // fields (nodeFill, clusterFill below) and stay real solid colors --
+        // this only affects the empty page area around the diagram.
+        background = "transparent",
         text = MaterialTheme.colorScheme.onSurface.toWebHex(),
         line = extendedColors.inkTertiary.toWebHex(),
         nodeFill = extendedColors.surfaceContainer.toWebHex(),
@@ -284,12 +287,13 @@ fun MessageMermaidBlock(
                 modifier = Modifier.padding(start = 4.dp)
             )
         } else {
+            // No card chrome by design: no fill, no border -- the diagram
+            // floats directly on the chat background (see the palette's
+            // "transparent" background above for why that's paired with
+            // this removal, not just this Box in isolation).
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(extendedColors.surfaceDialog)
-                    .border(1.dp, extendedColors.borderHairline, RoundedCornerShape(12.dp))
             ) {
                 AndroidView(
                     factory = { ctx ->
