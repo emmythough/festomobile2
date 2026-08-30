@@ -40,10 +40,6 @@ class FestoAppState(
         private const val MAIN_CONVERSATION_ID = "wendy-main"
     }
 
-    init {
-        coroutineScope.launch { loadHermesHistory() }
-    }
-
     /** Loads the shared Hermes session's transcript. Nothing is rendered
      * until a session is picked (Settings does that); tool/system rows
      * are skipped -- they're Wendy's plumbing, not conversation bubbles. */
@@ -152,10 +148,28 @@ class FestoAppState(
     val hermesSessionKey: String
         get() = backendPrefs?.loadHermesSessionKey() ?: ""
 
+    /** Initial transcript load. Declared AFTER every property
+     * loadHermesHistory() touches (conversations/messagesMap/
+     * isHistoryLoading/hermes*): an init block above them launches a
+     * coroutine that reads later-declared properties, which crashes under
+     * an eager dispatcher (unit tests, Main.immediate) with an NPE before
+     * those properties initialize. Declaration order is the guarantee. */
+    init {
+        coroutineScope.launch { loadHermesHistory() }
+    }
+
     val hermesSessions = mutableStateListOf<HermesSession>()
     var hermesSessionsLoading by mutableStateOf(false)
         private set
     var hermesSessionsError by mutableStateOf<String?>(null)
+        private set
+
+    /** Set only when the gateway answered OK but currently has no sessions.
+     * Deliberately kept apart from [hermesSessionsError]: "gateway
+     * unreachable / bad URL or key" and "no sessions yet" are different
+     * states and must render differently (see HermesSessionsResult's doc
+     * in HermesApi.kt, same reasoning as the old OutboxDownload). */
+    var hermesSessionsEmptyNote by mutableStateOf<String?>(null)
         private set
 
     /** Live tool activity during a Hermes turn (tool.* events), rendered
@@ -206,6 +220,7 @@ class FestoAppState(
         coroutineScope.launch {
             hermesSessionsLoading = true
             hermesSessionsError = null
+            hermesSessionsEmptyNote = null
             when (val result = HermesApi.fetchSessions(hermesBaseUrl, hermesApiKey)) {
                 is HermesSessionsResult.Ready -> {
                     hermesSessions.clear()
@@ -216,7 +231,7 @@ class FestoAppState(
                         )
                     )
                     if (result.sessions.isEmpty()) {
-                        hermesSessionsError = "The gateway has no sessions yet -- message Wendy on Telegram first."
+                        hermesSessionsEmptyNote = "The gateway has no sessions yet -- message Wendy on Telegram first."
                     }
                 }
                 is HermesSessionsResult.Failed -> {
@@ -279,9 +294,10 @@ class FestoAppState(
                 is HermesTranscriptResult.Ready -> {
                     memoryBrowserMessages.clear()
                     memoryBrowserMessages.addAll(result.entries)
-                    if (result.entries.isEmpty()) {
-                        memoryBrowserError = "No messages in this session yet."
-                    }
+                    // Ready-but-empty is NOT an error: leave the transcript
+                    // empty so MemoryScreen's dedicated "no messages yet"
+                    // state renders. memoryBrowserError is only for Failed
+                    // (gateway said no) -- see HermesTranscriptResult's doc.
                 }
                 is HermesTranscriptResult.Failed -> {
                     memoryBrowserError = result.message?.takeIf { it.isNotBlank() }
@@ -405,6 +421,9 @@ class FestoAppState(
             var errorMessage: String? = null
             var finalUsage: ServerUsage? = null
             val startedAt = System.currentTimeMillis()
+            // The session this turn is running on, tracked through its own
+            // rotations -- the guard for whose rotation gets persisted.
+            var turnSessionId = sessionId
 
             val turnFlow = if (image != null) {
                 // Verified multimodal contract: "message" may be a content
@@ -458,11 +477,20 @@ class FestoAppState(
                         finalUsage = event.usage
                     }
                     is HermesEvent.SessionRotated -> {
-                        // run.completed's session_id is authoritative --
-                        // persist it so the next turn and the transcript
-                        // follow the rotated session.
-                        hermesSessionId = event.sessionId
-                        backendPrefs?.saveHermesSessionId(event.sessionId)
+                        // run.completed's session_id is authoritative for the
+                        // session THIS turn ran on -- persist it so the next
+                        // turn and the transcript follow the rotated session.
+                        // Only while that session is still the current one:
+                        // if the user picked a different shared session in
+                        // Settings mid-turn, their explicit pick must not be
+                        // clobbered by a stale in-flight turn's rotation.
+                        // Rotation chains within the turn (A -> A2 -> A3)
+                        // still persist.
+                        if (hermesSessionId == sessionId || hermesSessionId == turnSessionId) {
+                            hermesSessionId = event.sessionId
+                            backendPrefs?.saveHermesSessionId(event.sessionId)
+                        }
+                        turnSessionId = event.sessionId
                     }
                     is HermesEvent.Error -> errorMessage = event.message
                 }
@@ -470,8 +498,12 @@ class FestoAppState(
 
             streamingTool = null
 
-            if (errorMessage != null && fullResponse.isBlank()) {
-                fullResponse = "Couldn't reach Wendy: $errorMessage"
+            // An error ends the turn even when partial text already
+            // streamed: keep the partial text but make the failure visible
+            // instead of letting the truncated reply pose as a complete one.
+            if (errorMessage != null) {
+                fullResponse = if (fullResponse.isBlank()) "Couldn't reach Wendy: $errorMessage"
+                else "${fullResponse}\n\n(Wendy's reply was cut short: $errorMessage)"
             }
 
             val msgIndex = convMessages.indexOfFirst { it.id == assistantMsgId }

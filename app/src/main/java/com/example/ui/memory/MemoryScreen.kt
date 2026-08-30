@@ -192,11 +192,18 @@ private fun MemorySessionList(appState: FestoAppState) {
         appState.hermesSessions.isEmpty() -> {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    // Failed ("gateway unreachable", bad URL/key) vs
+                    // Ready(emptyList()) ("no sessions yet") render
+                    // differently -- error styling vs neutral info (see
+                    // HermesSessionsResult's doc in HermesApi.kt).
+                    val sessionsError = appState.hermesSessionsError
                     Text(
-                        text = appState.hermesSessionsError
+                        text = sessionsError
+                            ?: appState.hermesSessionsEmptyNote
                             ?: "No sessions on the gateway yet.",
                         style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
-                        color = extendedColors.inkTertiary,
+                        color = if (sessionsError != null) extendedColors.accentAmber
+                        else extendedColors.inkTertiary,
                         textAlign = TextAlign.Center,
                         modifier = Modifier.padding(horizontal = 32.dp)
                     )

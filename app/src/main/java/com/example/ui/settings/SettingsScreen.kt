@@ -450,11 +450,24 @@ private fun HermesGatewaySection(
                         .padding(vertical = 12.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Text(
-                        text = appState.hermesSessionsError ?: "No sessions to show.",
-                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
-                        color = extendedColors.inkTertiary
-                    )
+                    // Failed ("gateway unreachable", bad URL/key) and
+                    // Ready(emptyList()) ("no sessions yet") are different
+                    // states and must render differently -- error styling
+                    // vs neutral info (see HermesSessionsResult's doc).
+                    val sessionsError = appState.hermesSessionsError
+                    if (sessionsError != null) {
+                        Text(
+                            text = sessionsError,
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
+                            color = extendedColors.accentAmber
+                        )
+                    } else {
+                        Text(
+                            text = appState.hermesSessionsEmptyNote ?: "No sessions to show.",
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
+                            color = extendedColors.inkTertiary
+                        )
+                    }
                     Spacer(modifier = Modifier.height(10.dp))
                     Box(
                         modifier = Modifier
