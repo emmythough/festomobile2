@@ -44,7 +44,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AddPhotoAlternate
@@ -850,9 +849,15 @@ private fun ChatComposer(
                 modifier = Modifier
                     .weight(1f)
                     .testTag("chat_input_field"),
+                // maxLines = 4 makes this a real multi-line composer, but
+                // ImeAction.Send told the keyboard to treat Enter as "send"
+                // instead of "newline" -- the exact reported bug (Enter
+                // sometimes sending instead of breaking the line). A real,
+                // dedicated Send button already exists below (canSend /
+                // onSend) and is the only send affordance now; Enter is a
+                // plain newline like any normal multi-line text field.
                 maxLines = 4,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = { onSend() }),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = Color.Transparent,
                     unfocusedBorderColor = Color.Transparent,
