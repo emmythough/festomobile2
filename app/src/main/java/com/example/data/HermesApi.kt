@@ -339,27 +339,42 @@ object HermesApi {
                 handleFrame(name, data)
             }
 
-            while (!source.exhausted() && !terminal) {
-                val line = source.readUtf8Line() ?: break // readUtf8Line strips both LF and CRLF
-                when {
-                    line.isBlank() -> endOfFrame()
-                    line.startsWith(":") -> { /* SSE comment / keepalive */ }
-                    line.startsWith("event:") -> eventName = line.substring("event:".length).trim()
-                    line.startsWith("data:") -> dataLines.add(line.substring("data:".length).removePrefix(" "))
-                    // id:/retry:/anything else -- irrelevant here
-                    else -> {}
+            try {
+                while (!source.exhausted() && !terminal) {
+                    val line = source.readUtf8Line() ?: break // readUtf8Line strips both LF and CRLF
+                    when {
+                        line.isBlank() -> endOfFrame()
+                        line.startsWith(":") -> { /* SSE comment / keepalive */ }
+                        line.startsWith("event:") -> eventName = line.substring("event:".length).trim()
+                        line.startsWith("data:") -> dataLines.add(line.substring("data:".length).removePrefix(" "))
+                        // id:/retry:/anything else -- irrelevant here
+                        else -> {}
+                    }
                 }
+                if (!terminal && dataLines.isNotEmpty()) endOfFrame() // trailing frame with no closing blank line
+            } catch (_: IOException) {
+                // Mid-stream connection drop. Without this catch the
+                // exception escapes the OkHttp callback AFTER the response
+                // was already signalled: OkHttp logs it and calls nothing
+                // else, so the flow never closes and the caller would wait
+                // forever (isStreamingResponse stuck true). Fall through to
+                // the finalize block -- same rule as a clean EOF: what
+                // streamed still stands (a half-received frame is dropped).
             }
-            if (!terminal && dataLines.isNotEmpty()) endOfFrame() // trailing frame with no closing blank line
 
             // Finalize the turn exactly once, even if the gateway never
             // sent assistant.completed/run.completed (dropped connection
-            // after deltas) -- the streamed text still stands.
+            // after deltas) -- the streamed text still stands. An error
+            // frame already ended the turn (one Completed-or-Error per
+            // turn, like WendyEvent's contract): never follow it with a
+            // Completed -- a partial reply must not pose as a success --
+            // nor with a duplicate Error.
+            if (errorMessage != null) return
             val reply = finalText.ifBlank { accumulated.toString() }
             if (reply.isNotBlank()) {
                 scope.trySend(HermesEvent.Completed(reply, finalUsage))
             } else {
-                scope.trySend(HermesEvent.Error(errorMessage ?: "Wendy's reply ended without any content"))
+                scope.trySend(HermesEvent.Error("Wendy's reply ended without any content"))
             }
         }
     }
@@ -372,7 +387,13 @@ object HermesApi {
                 client.newCall(authed("${base(baseUrl)}/api/sessions", apiKey).get().build())
                     .execute().use { response ->
                         if (!response.isSuccessful) {
-                            return@withContext HermesSessionsResult.Failed("HTTP ${response.code}")
+                            // Surface the body's real reason ("invalid key",
+                            // "unknown route") instead of a bare status --
+                            // the user is literally editing URL/key here,
+                            // same as fetchTranscript below.
+                            return@withContext HermesSessionsResult.Failed(
+                                errorDetail(response) ?: "HTTP ${response.code}"
+                            )
                         }
                         val body = response.body?.string()
                             ?: return@withContext HermesSessionsResult.Failed("empty response body")
