@@ -10,10 +10,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
@@ -34,7 +36,12 @@ class FestoAppState(
     /** Persisted-settings store for the Hermes gateway config (base URL,
      * API key, shared Wendy session id). Same nullable pattern as
      * themePrefs: unit tests construct without it. */
-    private val backendPrefs: BackendPreferences? = null
+    private val backendPrefs: BackendPreferences? = null,
+    /** Local transcript cache for instant resume after a process
+     * restart. Same nullable pattern as the other stores: unit tests
+     * construct without it, the real app path always provides it via
+     * rememberFestoAppState(). */
+    private val historyCache: MessageHistoryCache? = null
 ) {
     companion object {
         private const val MAIN_CONVERSATION_ID = "wendy-main"
@@ -42,7 +49,18 @@ class FestoAppState(
 
     /** Loads the shared Hermes session's transcript. Nothing is rendered
      * until a session is picked (Settings does that); tool/system rows
-     * are skipped -- they're Wendy's plumbing, not conversation bubbles. */
+     * are skipped -- they're Wendy's plumbing, not conversation bubbles.
+     *
+     * Reconciliation, not rebuild: whatever is already displayed (the
+     * synchronous cache restore from [restoreHistoryFromCache] on a cold
+     * start, or the previous session's rows) is diffed against the fetch
+     * by [reconcileHistory], and only a genuine divergence clears the
+     * list. An identical fetch leaves the list -- its size and object
+     * identity included -- untouched, so ChatScreen's scroll-to-bottom
+     * LaunchedEffect (keyed on `messages.size`) never re-fires on a cold
+     * start that changed nothing; a new tail appends and is exactly the
+     * case where scrolling to the bottom is correct. The cache file is
+     * rewritten only after a reconciliation that changed something. */
     private suspend fun loadHermesHistory() {
         val messages = messagesMap.getOrPut(MAIN_CONVERSATION_ID) { mutableStateListOf() }
         val sessionId = hermesSessionId
@@ -52,22 +70,21 @@ class FestoAppState(
             return
         }
         val entries = HermesApi.fetchMessages(hermesBaseUrl, hermesApiKey, sessionId)
-        messages.clear()
-        entries.forEachIndexed { index, entry ->
-            val role = when (entry.role) {
-                "user" -> Role.USER
-                "assistant" -> Role.ASSISTANT
-                else -> return@forEachIndexed
+        val fetched = historyMessagesFromEntries(entries, MAIN_CONVERSATION_ID)
+        when (val reconciliation = reconcileHistory(messages.toList(), fetched)) {
+            is HistoryReconciliation.Unchanged -> {
+                // Identical fetch: no clear, no re-add, no cache write.
+                // The list instance keeps its identity throughout.
             }
-            messages.add(
-                Message(
-                    id = "hmsg-$index",
-                    conversationId = MAIN_CONVERSATION_ID,
-                    role = role,
-                    content = entry.content,
-                    timestamp = entry.createdAtMs ?: System.currentTimeMillis(),
-                )
-            )
+            is HistoryReconciliation.AppendTail -> {
+                messages.addAll(reconciliation.messages)
+                persistHistory(sessionId, messages.toList())
+            }
+            is HistoryReconciliation.Rebuild -> {
+                messages.clear()
+                messages.addAll(fetched)
+                persistHistory(sessionId, fetched)
+            }
         }
         val idx = conversations.indexOfFirst { it.id == MAIN_CONVERSATION_ID }
         if (idx != -1 && entries.isNotEmpty()) {
@@ -79,6 +96,36 @@ class FestoAppState(
             )
         }
         isHistoryLoading = false
+    }
+
+    /** Synchronous, pre-network restore of the last persisted transcript:
+     * called from the init block BEFORE the gateway fetch is launched, so
+     * a process restart shows the real conversation with zero spinner and
+     * zero delay, and the fetch above then reconciles against it (usually
+     * [HistoryReconciliation.Unchanged]). Touches only properties declared
+     * above the init block (hermesSessionId / messagesMap /
+     * isHistoryLoading) -- same declaration-order guarantee the launch
+     * relies on. A cache from a different session than the currently
+     * selected one is ignored, not shown; a corrupt or absent one is
+     * simply no cache. Empty cached transcripts restore nothing and leave
+     * the spinner for the fetch to settle. */
+    private fun restoreHistoryFromCache() {
+        val sessionId = hermesSessionId ?: return
+        val cached = historyCache?.load() ?: return
+        if (cached.sessionId != sessionId || cached.messages.isEmpty()) return
+        messagesMap.getOrPut(MAIN_CONVERSATION_ID) { mutableStateListOf() }
+            .addAll(cached.messages)
+        isHistoryLoading = false
+    }
+
+    /** Persists the reconciled transcript for the next process restart.
+     * Only called after a reconciliation that changed something, so an
+     * unchanged cold start costs zero disk I/O. File I/O on Dispatchers
+     * .IO -- the transcript grows with the conversation and must never
+     * stall the main thread. */
+    private suspend fun persistHistory(sessionId: String, messages: List<Message>) {
+        val cache = historyCache ?: return
+        withContext(Dispatchers.IO) { cache.save(sessionId, messages) }
     }
 
     // Conversations: real Wendy has one continuous conversation shared
@@ -153,8 +200,18 @@ class FestoAppState(
      * isHistoryLoading/hermes*): an init block above them launches a
      * coroutine that reads later-declared properties, which crashes under
      * an eager dispatcher (unit tests, Main.immediate) with an NPE before
-     * those properties initialize. Declaration order is the guarantee. */
+     * those properties initialize. Declaration order is the guarantee.
+     *
+     * restoreHistoryFromCache() runs SYNCHRONOUSLY here, before the
+     * launch: it reads the same already-declared properties plus
+     * hermesSessionId, so a process restart enters first composition
+     * with the cached transcript already in messagesMap -- that is the
+     * whole point (zero spinner, and the scroll effect sees a settled
+     * list instead of a 0 -> N transition). The gateway fetch is then
+     * launched in the background and reconciles against what the cache
+     * restored. */
     init {
+        restoreHistoryFromCache()
         coroutineScope.launch { loadHermesHistory() }
     }
 
@@ -623,7 +680,8 @@ fun rememberFestoAppState(
     val context = androidx.compose.ui.platform.LocalContext.current.applicationContext
     val themePrefs = remember(context) { ThemePreferences(context) }
     val backendPrefs = remember(context) { BackendPreferences(context) }
+    val historyCache = remember(context) { MessageHistoryCache(context) }
     return remember {
-        FestoAppState(coroutineScope, themePrefs, initialThemeMode, backendPrefs)
+        FestoAppState(coroutineScope, themePrefs, initialThemeMode, backendPrefs, historyCache)
     }
 }
