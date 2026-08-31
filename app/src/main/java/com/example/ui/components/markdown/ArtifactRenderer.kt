@@ -126,6 +126,11 @@ internal const val MIN_ARTIFACT_HEIGHT_DP = 96
 internal const val MAX_ARTIFACT_HEIGHT_DP = 720
 internal const val INITIAL_ARTIFACT_HEIGHT_DP = 220
 
+/** Height adopted when the timeout probe finds the page alive but it never
+ * reported (late report path). Chosen at the initial placeholder height so
+ * the reveal does not visibly resize; the WebView keeps rendering past it. */
+internal const val DEFAULT_RECOVERY_HEIGHT_DP = 220
+
 /** Base URL handed to [WebView.loadDataWithBaseURL]: a real https origin
  * (so the page's JS gets a sane same-origin context and localStorage works,
  * matching mermaid's https CDN base) on a host that resolves to nothing --
@@ -282,6 +287,14 @@ internal fun buildArtifactBootstrapScript(): String = """
         } catch (ignored) {}
         return true;
       };
+      window.addEventListener('unhandledrejection', function (event) {
+        try {
+          if (window.AndroidBridge && window.AndroidBridge.onError) {
+            var r = event && event.reason;
+            window.AndroidBridge.onError('async: ' + (r && r.message ? r.message : String(r)));
+          }
+        } catch (ignored) {}
+      });
       function measure() {
         try {
           var h = document.body
@@ -296,10 +309,18 @@ internal fun buildArtifactBootstrapScript(): String = """
         var settle = function () {
           window.setTimeout(measure, $ARTIFACT_SETTLE_DELAY_MS);
         };
-        if (document.readyState === 'complete') {
-          settle();
+        // DOMContentLoaded fires when the markup is parsed and inline
+        // scripts have run -- long before 'load', which also waits on
+        // every subresource. A hanging <img>/<link>/<script src> must not
+        // delay the ready report (that was a real timeout class: valid
+        // content strangled by a slow subresource until the catch-all
+        // timer fired). The measurement here is a floor -- a height that
+        // grows after this point still shows, because the Android side
+        // re-measures on its late-load probe.
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', settle);
         } else {
-          window.addEventListener('load', settle);
+          settle();
         }
       } catch (e) {
         report(0);
@@ -381,9 +402,33 @@ fun MessageArtifactBlock(
     // Layer 3 -- catch-all fallback: if none of the error callbacks above
     // ran within the timeout (hung JS, a script that never finishes), fail
     // visibly. Shorter than mermaid's 15s (see ARTIFACT_LOAD_TIMEOUT_MS).
+    // Before failing, ask the page whether it actually rendered: a DOM-
+    // ready report is the primary path now, but a page whose 'load' hung on
+    // a slow subresource may still have painted perfectly good content.
+    // If the probe finds live content, adopt it instead of tearing it down.
     LaunchedEffect(document) {
         delay(ARTIFACT_LOAD_TIMEOUT_MS)
-        fail("timed out after ${ARTIFACT_LOAD_TIMEOUT_MS / 1000}s waiting for the page to report ready")
+        if (state != ArtifactRenderState.Loading) return@LaunchedEffect
+        val webView = webViewRef.value
+        if (webView == null) {
+            fail("timed out after ${ARTIFACT_LOAD_TIMEOUT_MS / 1000}s waiting for the page to report ready")
+            return@LaunchedEffect
+        }
+        webView.evaluateJavascript(
+            "(function(){try{var b=document.body;return b&&b.scrollHeight>10?'alive':'empty';}catch(e){return 'empty';}})()"
+        ) { result ->
+            val alive = result?.contains("alive") == true
+            mainHandler.post {
+                if (alive && state == ArtifactRenderState.Loading) {
+                    // Page rendered fine -- the report was just late.
+                    // Take the default height; the real one is close.
+                    artifactHeight = DEFAULT_RECOVERY_HEIGHT_DP.dp
+                    state = ArtifactRenderState.Ready
+                } else if (state == ArtifactRenderState.Loading) {
+                    fail("timed out after ${ARTIFACT_LOAD_TIMEOUT_MS / 1000}s waiting for the page to report ready")
+                }
+            }
+        }
     }
 
     Column(modifier = modifier.fillMaxWidth()) {
