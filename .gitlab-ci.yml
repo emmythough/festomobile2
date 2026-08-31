@@ -1,0 +1,19 @@
+build:
+  image: inovex/gitlab-ci-android
+  stage: build
+  variables:
+    GRADLE_OPTS: "-Dorg.gradle.daemon=false"
+  before_script:
+    - export GRADLE_USER_HOME=$(pwd)/.gradle
+    - export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+    - chmod +x ./gradlew
+  cache:
+    key: ${CI_PROJECT_ID}
+    paths:
+      - .gradle/
+  script:
+    - ./gradlew assembleDebug --no-daemon
+  artifacts:
+    expire_in: 2 weeks
+    paths:
+      - app/build/outputs/apk/debug/*.apk
