@@ -151,6 +151,18 @@ object HermesApi {
         // photo as base64 (~33% larger than raw) -- 10s was too tight on a
         // weak mobile uplink. Text-only turns are unaffected.
         .writeTimeout(30, TimeUnit.SECONDS)
+        // BUG-HUNT LOGGING (2026-09-02): "repeated old message" investigation.
+        // Logs every app<->gateway call and the first bytes of each response so
+        // we can see exactly what history the app is being served (and when the
+        // stale "Unit O" transcript resurfaces). Remove once the bug is fixed.
+        .addInterceptor { chain ->
+            val req = chain.request()
+            android.util.Log.i("FestoBugHunt", "REQ ${req.method} ${req.url}")
+            val resp = chain.proceed(req)
+            val peek = resp.peekBody(512)
+            android.util.Log.i("FestoBugHunt", "RES ${resp.code} ${req.url.encodedPath} first=${peek.string().take(400).replace('\n', ' ')}")
+            resp
+        }
         .build()
 
     private fun base(baseUrl: String) = baseUrl.trim().trimEnd('/')
